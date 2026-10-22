@@ -1,0 +1,16 @@
+# ==============================================================================
+# FIN7003: Derivatives and Financial Risk Management
+# Maruti Suzuki India Limited (MSIL) - Financial Risk Simulation Model & Dashboard
+# Group 4 | School of Management, BML Munjal University
+# ==============================================================================
+
+pandas>=2.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+scipy>=1.10.0
+jupyter>=1.0.0
+ipykernel>=6.20.0
+nbformat>=5.9.0
+nbclient>=0.8.0
+streamlit>=1.30.0
+plotly>=5.15.0
