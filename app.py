@@ -257,20 +257,20 @@ with tab1:
         st.metric("Net Debt Position", "-₹423 Cr", "Virtually Debt-Free (Net Cash)")
 
     st.markdown("---")
-    st.subheader("2. Verified Official Disclosures (Annual Integrated Report FY 2023–24)")
+    st.subheader("2. Historical Company Disclosures (Annual Integrated Report FY 2023–24)")
     
     disc_df = pd.DataFrame([
         {
             "Financial Statement Schedule": "Note 44: CIF Value of Imports",
             "Item": "Raw Materials, Components & Capital Goods",
             "Reported Value (FY 2023-24)": "₹52,595 Million (~₹5,260 Cr)",
-            "Currency / Exposure Details": "JPY, USD, EUR (JPY carries primary import weight for engine/transmission components)"
+            "Currency / Exposure Details": "Aggregate import value across categories; not all imports are JPY-denominated. JPY is the currency modeled separately below."
         },
         {
             "Financial Statement Schedule": "Note 29 & Note 34.2: Related Party Expenses",
             "Item": "Technical Royalty to Suzuki Motor Corp (Japan)",
             "Reported Value (FY 2023-24)": "₹49,080 Million (~₹4,908 Cr)",
-            "Currency / Exposure Details": "JPY (Committed annual technical collaboration outflow)"
+            "Currency / Exposure Details": "Related-party royalty expense. Verify contractual settlement currency before treating the full amount as a JPY payable."
         },
         {
             "Financial Statement Schedule": "Note 33.2: Foreign Currency Risk Exposure",
@@ -315,7 +315,7 @@ with tab1:
     with c_b:
         st.warning("""
         **Natural Hedge Limitations**  
-        MSIL earned ₹163,010 Million from vehicle exports in FY24. However, export sales are billed in **USD and EUR** (Africa, Europe, Middle East), while import commitments are concentrated in **JPY**, leaving an active currency mismatch.
+        Export receipts and foreign-currency payments may be denominated in different currencies. USD/EUR receipts do not automatically offset a JPY payable. A valid natural hedge must match currency, amount and settlement timing. Use actual invoice/treasury data to quantify the remaining net exposure.
         """)
     with c_c:
         st.success("""
