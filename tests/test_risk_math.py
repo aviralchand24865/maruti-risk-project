@@ -1,6 +1,9 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 
 from risk_math import (
     calculate_cash_outflows,
@@ -24,42 +27,38 @@ class TestRiskMath(unittest.TestCase):
         self.assertTrue(np.allclose(a[0], 0.55))
 
     def test_zero_hedge_equals_unhedged(self):
-        terminal_rates = np.array([0.50, 0.55, 0.60])
-        unhedged, hedged, _, _ = calculate_cash_outflows(
-            10_000_000_000, terminal_rates, 0.5855, 0.0
-        )
+        rates = np.array([0.50, 0.55, 0.60])
+        unhedged, hedged, _, _ = calculate_cash_outflows(10_000_000_000, rates, 0.5855, 0.0)
         self.assertTrue(np.allclose(unhedged, hedged))
 
     def test_full_hedge_has_constant_outflow(self):
-        terminal_rates = np.array([0.50, 0.55, 0.60])
-        _, hedged, locked, variable = calculate_cash_outflows(
-            10_000_000_000, terminal_rates, 0.5855, 1.0
-        )
+        rates = np.array([0.50, 0.55, 0.60])
+        _, hedged, locked, variable = calculate_cash_outflows(10_000_000_000, rates, 0.5855, 1.0)
         self.assertTrue(np.allclose(hedged, hedged[0]))
         self.assertTrue(np.allclose(variable, 0.0))
         self.assertTrue(np.allclose(locked, hedged))
 
     def test_half_hedge_halves_standard_deviation(self):
-        terminal_rates = np.array([0.49, 0.52, 0.55, 0.60, 0.64])
-        unhedged, hedged, _, _ = calculate_cash_outflows(
-            10_000_000_000, terminal_rates, 0.5855, 0.5
-        )
+        rates = np.array([0.49, 0.52, 0.55, 0.60, 0.64])
+        unhedged, hedged, _, _ = calculate_cash_outflows(10_000_000_000, rates, 0.5855, 0.5)
         self.assertAlmostEqual(np.std(hedged), 0.5 * np.std(unhedged), places=10)
 
     def test_expected_shortfall_is_average_of_high_cost_tail(self):
-        values = np.arange(1.0, 101.0)
-        summary = summarize_outflows(values)
-        self.assertAlmostEqual(summary["p95"], 95.05)
-        self.assertAlmostEqual(summary["es95"], 98.0)
-        self.assertGreaterEqual(summary["es95"], summary["p95"])
-        self.assertEqual(summary["max"], 100.0)
+        stats = summarize_outflows(np.arange(1.0, 101.0))
+        self.assertAlmostEqual(stats["p95"], 95.05)
+        self.assertAlmostEqual(stats["es95"], 98.0)
+        self.assertGreaterEqual(stats["es95"], stats["p95"])
+        self.assertEqual(stats["max"], 100.0)
 
-    def test_historical_volatility_estimator_uses_repository_csv(self):
-        value, count, error = estimate_annualized_volatility(
-            "jpy_inr_historical_data.csv", trading_days=252
-        )
+    def test_historical_volatility_estimator_uses_clean_sample_csv(self):
+        dates = pd.date_range("2024-01-01", periods=80, freq="B")
+        rates = 0.55 * np.exp(np.linspace(0.0, 0.07, len(dates)) + 0.002 * np.sin(np.arange(len(dates))))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "rates.csv"
+            pd.DataFrame({"Date": dates, "JPYINR_Rate": rates}).to_csv(path, index=False)
+            value, count, error = estimate_annualized_volatility(path, trading_days=252)
         self.assertIsNone(error)
-        self.assertGreater(count, 100)
+        self.assertEqual(count, 79)
         self.assertGreater(value, 0.0)
 
 
