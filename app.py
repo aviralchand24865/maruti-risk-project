@@ -14,33 +14,13 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-
-def estimate_annualized_volatility(csv_path, trading_days=252):
-    """Estimate annualized volatility from positive JPY/INR observations.
-
-    Uses the sample standard deviation of consecutive log returns multiplied by
-    sqrt(trading_days). Returns (volatility, return_count, error_message).
-    """
-    try:
-        data = pd.read_csv(csv_path)
-        required = {"Date", "JPYINR_Rate"}
-        if not required.issubset(data.columns):
-            return None, 0, "CSV must contain Date and JPYINR_Rate columns."
-
-        rates = pd.to_numeric(data["JPYINR_Rate"], errors="coerce")
-        rates = rates.where(rates > 0)
-        log_returns = np.log(rates / rates.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
-
-        if len(log_returns) < 30:
-            return None, int(len(log_returns)), "At least 30 valid returns are required."
-
-        volatility = float(log_returns.std(ddof=1) * np.sqrt(trading_days))
-        if not np.isfinite(volatility) or volatility <= 0:
-            return None, int(len(log_returns)), "Estimated volatility was not valid."
-
-        return volatility, int(len(log_returns)), None
-    except (OSError, ValueError, pd.errors.ParserError) as exc:
-        return None, 0, f"Historical data could not be loaded: {exc}"
+from risk_math import (
+    calculate_cash_outflows,
+    calculate_forward_rate,
+    estimate_annualized_volatility,
+    simulate_gbm,
+    summarize_outflows,
+)
 
 # --------------------------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -196,52 +176,51 @@ with st.sidebar.expander("🛠️ Advanced Financial Benchmarks"):
 INR_CRORE = 10_000_000
 
 # 1. Forward Rate via Covered Interest Rate Parity
-forward_rate = s0_spot_rate * np.exp((r_inr - r_jpy) * horizon_years)
+forward_rate = calculate_forward_rate(s0_spot_rate, r_inr, r_jpy, horizon_years)
 forward_premium_pct = ((forward_rate / s0_spot_rate) - 1.0) * 100.0
 initial_spot_value_cr = (exposure_jpy * s0_spot_rate) / INR_CRORE
 
 # 2. Monte Carlo Simulation Engine (GBM)
-np.random.seed(int(seed))
-dt = horizon_years / trading_days
-drift_dt = ((r_inr - r_jpy) - 0.5 * (ann_volatility ** 2)) * dt
-diffusion_dt = ann_volatility * np.sqrt(dt)
-
-simulated_rates = np.zeros((trading_days + 1, num_paths))
-simulated_rates[0, :] = s0_spot_rate
-
-for step in range(1, trading_days + 1):
-    z = np.random.standard_normal(num_paths)
-    simulated_rates[step, :] = simulated_rates[step - 1, :] * np.exp(drift_dt + diffusion_dt * z)
-
+simulated_rates = simulate_gbm(
+    spot_rate=s0_spot_rate,
+    domestic_rate=r_inr,
+    foreign_rate=r_jpy,
+    volatility=ann_volatility,
+    horizon_years=horizon_years,
+    trading_days=trading_days,
+    num_paths=num_paths,
+    seed=int(seed),
+)
 terminal_rates = simulated_rates[-1, :]
 
 # 3. Cash Outflow Calculations (INR Crores)
-# Unhedged Outflow
-unhedged_outflow_cr = (exposure_jpy * terminal_rates) / INR_CRORE
-
-# Hedged Outflow
 hedged_jpy = exposure_jpy * hedge_ratio
 unhedged_jpy = exposure_jpy * (1.0 - hedge_ratio)
-forward_locked_cost_cr = (hedged_jpy * forward_rate) / INR_CRORE
-spot_variable_cost_cr = (unhedged_jpy * terminal_rates) / INR_CRORE
-hedged_outflow_cr = forward_locked_cost_cr + spot_variable_cost_cr
+(
+    unhedged_outflow_cr,
+    hedged_outflow_cr,
+    forward_locked_cost_cr,
+    spot_variable_cost_cr,
+) = calculate_cash_outflows(
+    exposure_jpy=exposure_jpy,
+    terminal_rates=terminal_rates,
+    forward_rate=forward_rate,
+    hedge_ratio=hedge_ratio,
+)
 
 # Statistical Metrics
 # Outflow percentiles are high-cost thresholds. Expected shortfall is the
 # average cash outflow among simulated outcomes at or above the 95th percentile.
-mean_unh = np.mean(unhedged_outflow_cr)
-std_unh = np.std(unhedged_outflow_cr, ddof=0)
-var95_unh = np.percentile(unhedged_outflow_cr, 95)
-var99_unh = np.percentile(unhedged_outflow_cr, 99)
-max_unh = np.max(unhedged_outflow_cr)
-es95_unh = np.mean(unhedged_outflow_cr[unhedged_outflow_cr >= var95_unh])
+stats_unh = summarize_outflows(unhedged_outflow_cr)
+stats_hed = summarize_outflows(hedged_outflow_cr)
 
-mean_hed = np.mean(hedged_outflow_cr)
-std_hed = np.std(hedged_outflow_cr, ddof=0)
-var95_hed = np.percentile(hedged_outflow_cr, 95)
-var99_hed = np.percentile(hedged_outflow_cr, 99)
-max_hed = np.max(hedged_outflow_cr)
-es95_hed = np.mean(hedged_outflow_cr[hedged_outflow_cr >= var95_hed])
+mean_unh, std_unh = stats_unh["mean"], stats_unh["std"]
+var95_unh, var99_unh = stats_unh["p95"], stats_unh["p99"]
+max_unh, es95_unh = stats_unh["max"], stats_unh["es95"]
+
+mean_hed, std_hed = stats_hed["mean"], stats_hed["std"]
+var95_hed, var99_hed = stats_hed["p95"], stats_hed["p99"]
+max_hed, es95_hed = stats_hed["max"], stats_hed["es95"]
 
 std_reduction_pct = (1.0 - (std_hed / std_unh)) * 100.0 if std_unh > 0 else 0.0
 var95_savings_cr = var95_unh - var95_hed
@@ -314,6 +293,15 @@ with tab1:
     ])
     st.table(disc_df)
 
+    st.caption(
+        "Historical company disclosures shown above are context, not live data. The ¥10 billion simulation "
+        "exposure, spot rate, volatility and rates are model inputs; the selected notional is not asserted to be "
+        "Maruti Suzuki's actual open treasury position. Imports and receipts can involve several currencies."
+    )
+    st.markdown(
+        "Source: [Maruti Suzuki investor reports](https://www.marutisuzuki.com/corporate/investors/company-reports). "
+        "Confirm the specific note, reporting scope (standalone/consolidated), currency and period before presenting figures."
+    )
     st.markdown("---")
     st.subheader("3. Direction and Nature of Risk")
     c_a, c_b, c_c = st.columns(3)
@@ -353,7 +341,7 @@ with tab2:
     m2.metric("Theoretical Forward (F)", f"₹{forward_rate:.4f} / JPY", f"+{forward_premium_pct:.2f}% CIRP Premium")
     m3.metric("Simulated Mean (E[S_T])", f"₹{np.mean(terminal_rates):.4f} / JPY", f"Bias: {((np.mean(terminal_rates)/forward_rate)-1)*100:.2f}%")
     m4.metric("95th-Pct Terminal Rate", f"₹{np.percentile(terminal_rates, 95):.4f} / JPY", "Upper 5% rate threshold")
-    m5.metric("Simulated Max Rate", f"₹{np.max(terminal_rates):.4f} / JPY", "Worst-case shock")
+    m5.metric("Maximum Simulated Rate", f"₹{np.max(terminal_rates):.4f} / JPY", "Sample maximum, not a limit")
 
     # Plotly Visualisation of Paths & Distribution
     col_p1, col_p2 = st.columns([3, 2])
@@ -528,7 +516,7 @@ with tab3:
     with col_h2:
         sorted_unh = np.sort(unhedged_outflow_cr)
         sorted_hed = np.sort(hedged_outflow_cr)
-        cdf_prob = np.linspace(0, 1, num_paths)
+        cdf_prob = np.arange(1, num_paths + 1) / (num_paths + 1)
 
         fig_cdf = go.Figure()
         fig_cdf.add_trace(go.Scatter(
@@ -662,6 +650,42 @@ with tab4:
         }
     ])
     st.table(ir_comp)
+
+    # Show how the simplified annual cash-flow sensitivity scales with the selected rate shift.
+    sensitivity_bps = np.arange(25, 251, 25)
+    sensitivity_shift = sensitivity_bps / 10000.0
+    debt_sensitivity = (borrowings_m * sensitivity_shift) / 10.0
+    treasury_sensitivity = (debt_mf_m * sensitivity_shift) / 10.0
+
+    fig_sensitivity = make_subplots(specs=[[{"secondary_y": True}]])
+    fig_sensitivity.add_trace(
+        go.Scatter(
+            x=sensitivity_bps,
+            y=debt_sensitivity,
+            mode="lines+markers",
+            name="Borrowings (₹ crore/year)",
+        ),
+        secondary_y=False,
+    )
+    fig_sensitivity.add_trace(
+        go.Scatter(
+            x=sensitivity_bps,
+            y=treasury_sensitivity,
+            mode="lines+markers",
+            name="Treasury investments (₹ crore/year)",
+        ),
+        secondary_y=True,
+    )
+    fig_sensitivity.update_layout(
+        title="Simple Annual Interest / Yield Sensitivity by Rate Shift",
+        xaxis_title="Rate shift (basis points)",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(l=40, r=40, t=55, b=80),
+        height=380,
+    )
+    fig_sensitivity.update_yaxes(title_text="Borrowings impact (₹ crore/year)", secondary_y=False)
+    fig_sensitivity.update_yaxes(title_text="Treasury yield sensitivity (₹ crore/year)", secondary_y=True)
+    st.plotly_chart(fig_sensitivity, use_container_width=True)
 
     st.info("""
     **Interpretation and limitation:**  
