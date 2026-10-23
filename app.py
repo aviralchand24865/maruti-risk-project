@@ -6,11 +6,41 @@ Interactive Risk Simulation & Derivative Hedging Dashboard
 ========================================================================================
 """
 
+from pathlib import Path
+
 import streamlit as st
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+
+
+def estimate_annualized_volatility(csv_path, trading_days=252):
+    """Estimate annualized volatility from positive JPY/INR observations.
+
+    Uses the sample standard deviation of consecutive log returns multiplied by
+    sqrt(trading_days). Returns (volatility, return_count, error_message).
+    """
+    try:
+        data = pd.read_csv(csv_path)
+        required = {"Date", "JPYINR_Rate"}
+        if not required.issubset(data.columns):
+            return None, 0, "CSV must contain Date and JPYINR_Rate columns."
+
+        rates = pd.to_numeric(data["JPYINR_Rate"], errors="coerce")
+        rates = rates.where(rates > 0)
+        log_returns = np.log(rates / rates.shift(1)).replace([np.inf, -np.inf], np.nan).dropna()
+
+        if len(log_returns) < 30:
+            return None, int(len(log_returns)), "At least 30 valid returns are required."
+
+        volatility = float(log_returns.std(ddof=1) * np.sqrt(trading_days))
+        if not np.isfinite(volatility) or volatility <= 0:
+            return None, int(len(log_returns)), "Estimated volatility was not valid."
+
+        return volatility, int(len(log_returns)), None
+    except (OSError, ValueError, pd.errors.ParserError) as exc:
+        return None, 0, f"Historical data could not be loaded: {exc}"
 
 # --------------------------------------------------------------------------------------
 # PAGE CONFIGURATION
@@ -111,15 +141,46 @@ hedge_ratio = st.sidebar.slider(
     help="Percentage of JPY exposure hedged via 1-Year Currency Forward Contract."
 ) / 100.0
 
-ann_volatility = st.sidebar.slider(
-    "Annualized Volatility (σ)",
+manual_ann_volatility = st.sidebar.slider(
+    "Manual Annualized Volatility (σ)",
     min_value=0.05,
     max_value=0.30,
     value=0.1500,
     step=0.0100,
     format="%.2f",
-    help="Historical annualized volatility calibrated to 3-year daily JPY/INR returns (~15.0%)."
+    help="Manual assumption used when Manual Assumption is selected below."
 )
+
+historical_csv = Path(__file__).with_name("jpy_inr_historical_data.csv")
+historical_volatility, historical_return_count, historical_vol_error = estimate_annualized_volatility(
+    historical_csv, trading_days=252
+)
+volatility_source = st.sidebar.radio(
+    "Volatility source",
+    options=["Manual assumption", "Estimate from historical CSV"],
+    index=0,
+    help="Historical mode estimates annualized volatility from consecutive log returns in the bundled JPY/INR data."
+)
+
+if volatility_source == "Estimate from historical CSV" and historical_volatility is not None:
+    ann_volatility = historical_volatility
+    st.sidebar.caption(
+        f"Active volatility: {ann_volatility:.2%}, estimated from "
+        f"{historical_return_count:,} historical log returns."
+    )
+elif volatility_source == "Estimate from historical CSV":
+    ann_volatility = manual_ann_volatility
+    st.sidebar.warning(
+        f"{historical_vol_error or 'Historical volatility is unavailable.'} "
+        "Using the manual assumption instead."
+    )
+else:
+    ann_volatility = manual_ann_volatility
+    if historical_volatility is not None:
+        st.sidebar.caption(
+            f"Historical estimate for comparison: {historical_volatility:.2%} "
+            f"({historical_return_count:,} log returns)."
+        )
 
 with st.sidebar.expander("🛠️ Advanced Financial Benchmarks"):
     r_inr = st.number_input("Domestic Risk-Free Rate (India, r_INR)", value=0.0650, step=0.0025, format="%.4f")
@@ -166,24 +227,26 @@ spot_variable_cost_cr = (unhedged_jpy * terminal_rates) / INR_CRORE
 hedged_outflow_cr = forward_locked_cost_cr + spot_variable_cost_cr
 
 # Statistical Metrics
+# Outflow percentiles are high-cost thresholds. Expected shortfall is the
+# average cash outflow among simulated outcomes at or above the 95th percentile.
 mean_unh = np.mean(unhedged_outflow_cr)
-std_unh = np.std(unhedged_outflow_cr)
+std_unh = np.std(unhedged_outflow_cr, ddof=0)
 var95_unh = np.percentile(unhedged_outflow_cr, 95)
 var99_unh = np.percentile(unhedged_outflow_cr, 99)
 max_unh = np.max(unhedged_outflow_cr)
-cfar95_unh = var95_unh - mean_unh
+es95_unh = np.mean(unhedged_outflow_cr[unhedged_outflow_cr >= var95_unh])
 
 mean_hed = np.mean(hedged_outflow_cr)
-std_hed = np.std(hedged_outflow_cr)
+std_hed = np.std(hedged_outflow_cr, ddof=0)
 var95_hed = np.percentile(hedged_outflow_cr, 95)
 var99_hed = np.percentile(hedged_outflow_cr, 99)
 max_hed = np.max(hedged_outflow_cr)
-cfar95_hed = var95_hed - mean_hed
+es95_hed = np.mean(hedged_outflow_cr[hedged_outflow_cr >= var95_hed])
 
-vol_reduction_pct = (1.0 - (std_hed / std_unh)) * 100.0 if std_unh > 0 else 0.0
+std_reduction_pct = (1.0 - (std_hed / std_unh)) * 100.0 if std_unh > 0 else 0.0
 var95_savings_cr = var95_unh - var95_hed
-worst_case_savings_cr = max_unh - max_hed
-
+es95_savings_cr = es95_unh - es95_hed
+max_outflow_difference_cr = max_unh - max_hed
 # --------------------------------------------------------------------------------------
 # TABS SETUP
 # --------------------------------------------------------------------------------------
@@ -280,7 +343,7 @@ with tab1:
 with tab2:
     st.subheader("1-Year Monte Carlo Exchange Rate Simulation (GBM Engine)")
     st.markdown(f"""
-    Simulating **{num_paths:,} independent price trajectories** over **252 trading days** (1-Year Horizon) using **Geometric Brownian Motion (GBM)** under Covered Interest Rate Parity drift:
+    Simulating **{num_paths:,} independent price trajectories** over **252 trading days** (1-Year Horizon) using **Geometric Brownian Motion (GBM)** with a drift based on the domestic–foreign interest-rate differential. The active annualized volatility is **{ann_volatility:.2%}** ({volatility_source.lower()}):
     $$S_{{t+\\Delta t}} = S_t \\exp\\left( \\left((r_{{\\text{{INR}}}} - r_{{\\text{{JPY}}}}) - \\frac{1}{2}\\sigma^2\\right)\\Delta t + \\sigma\\sqrt{{\\Delta t}} Z_t \\right)$$
     """)
 
@@ -289,7 +352,7 @@ with tab2:
     m1.metric("Starting Spot Rate (S0)", f"₹{s0_spot_rate:.4f} / JPY", f"₹{s0_spot_rate*100:.2f} per 100 JPY")
     m2.metric("Theoretical Forward (F)", f"₹{forward_rate:.4f} / JPY", f"+{forward_premium_pct:.2f}% CIRP Premium")
     m3.metric("Simulated Mean (E[S_T])", f"₹{np.mean(terminal_rates):.4f} / JPY", f"Bias: {((np.mean(terminal_rates)/forward_rate)-1)*100:.2f}%")
-    m4.metric("95% Adverse Tail Rate", f"₹{np.percentile(terminal_rates, 95):.4f} / JPY", "Top 5% JPY Spike")
+    m4.metric("95th-Pct Terminal Rate", f"₹{np.percentile(terminal_rates, 95):.4f} / JPY", "Upper 5% rate threshold")
     m5.metric("Simulated Max Rate", f"₹{np.max(terminal_rates):.4f} / JPY", "Worst-case shock")
 
     # Plotly Visualisation of Paths & Distribution
@@ -340,7 +403,7 @@ with tab2:
             y=[np.percentile(terminal_rates, 95), np.percentile(terminal_rates, 95)],
             mode='lines',
             line=dict(color='#9333EA', width=2, dash='dot'),
-            name=f'95th Percentile Adverse (₹{np.percentile(terminal_rates, 95):.4f})'
+            name=f'95th Percentile Terminal Rate (₹{np.percentile(terminal_rates, 95):.4f})'
         ))
 
         fig_paths.update_layout(
@@ -364,7 +427,7 @@ with tab2:
         ))
         fig_hist.add_vline(x=s0_spot_rate, line_width=2, line_dash="dash", line_color="#16A34A", annotation_text="Spot S0", annotation_position="top left")
         fig_hist.add_vline(x=forward_rate, line_width=2, line_dash="dashdot", line_color="#EA580C", annotation_text="Forward F", annotation_position="top right")
-        fig_hist.add_vline(x=np.percentile(terminal_rates, 95), line_width=2, line_dash="dot", line_color="#9333EA", annotation_text="95% VaR", annotation_position="top right")
+        fig_hist.add_vline(x=np.percentile(terminal_rates, 95), line_width=2, line_dash="dot", line_color="#9333EA", annotation_text="95th pct. rate", annotation_position="top right")
 
         fig_hist.update_layout(
             title="<b>Terminal JPY/INR Distribution at T = 1 Year</b>",
@@ -374,6 +437,12 @@ with tab2:
             height=460
         )
         st.plotly_chart(fig_hist, use_container_width=True)
+
+    st.caption(
+        f"Volatility source: {volatility_source}. The historical estimate is calculated from consecutive "
+        "log returns in the bundled CSV and annualized using √252. The forward rate uses a continuously "
+        "compounded interest-rate-parity approximation. Simulations are conditional on these assumptions."
+    )
 
 # ======================================================================================
 # TAB 3: HEDGING ANALYSIS & PAYOFF COMPARISON
@@ -389,14 +458,39 @@ with tab3:
     # Metric Cards
     k1, k2, k3, k4 = st.columns(4)
     with k1:
-        st.metric("Expected Outflow (Mean)", f"₹{mean_hed:,.2f} Cr", f"vs Unhedged ₹{mean_unh:,.2f} Cr (Neutral)")
+        st.metric(
+            "Expected Outflow (Mean)",
+            f"₹{mean_hed:,.2f} Cr",
+            f"Difference vs unhedged: ₹{mean_hed - mean_unh:+,.2f} Cr",
+            delta_color="inverse"
+        )
     with k2:
-        st.metric("Cash Flow Volatility (StdDev)", f"₹{std_hed:,.2f} Cr", f"-{vol_reduction_pct:.1f}% Variance Reduction", delta_color="inverse")
+        st.metric(
+            "Cash Flow Std. Deviation",
+            f"₹{std_hed:,.2f} Cr",
+            f"{std_reduction_pct:.1f}% lower than unhedged",
+            delta_color="inverse"
+        )
     with k3:
-        st.metric("95% Value at Risk (VaR Outflow)", f"₹{var95_hed:,.2f} Cr", f"Savings: ₹{var95_savings_cr:,.2f} Cr", delta_color="inverse")
+        st.metric(
+            "95th-Pct Outflow",
+            f"₹{var95_hed:,.2f} Cr",
+            f"Reduction: ₹{var95_savings_cr:,.2f} Cr",
+            delta_color="inverse"
+        )
     with k4:
-        st.metric("Worst-Case Cash Outflow", f"₹{max_hed:,.2f} Cr", f"Savings: ₹{worst_case_savings_cr:,.2f} Cr", delta_color="inverse")
+        st.metric(
+            "Maximum Simulated Outflow",
+            f"₹{max_hed:,.2f} Cr",
+            f"Difference: ₹{max_outflow_difference_cr:,.2f} Cr",
+            delta_color="inverse"
+        )
 
+    st.caption(
+        "Interpretation: the 95th-percentile outflow is a high-cost threshold, not a guarantee. "
+        "The 95% expected shortfall below is the average outflow among simulated results at or above that threshold. "
+        "Maximum simulated outflow is the largest result in this finite sample, not a theoretical worst case."
+    )
     st.markdown("---")
 
     col_h1, col_h2 = st.columns(2)
@@ -417,8 +511,8 @@ with tab3:
             opacity=0.6,
             name=f'Hedged {hedge_ratio:.0%} (σ = ₹{std_hed:.1f} Cr)'
         ))
-        fig_comp.add_vline(x=var95_unh, line_width=2, line_dash="dash", line_color="#DC2626", annotation_text="Unhedged 95% VaR")
-        fig_comp.add_vline(x=var95_hed, line_width=2, line_dash="dash", line_color="#16A34A", annotation_text=f"Hedged 95% VaR")
+        fig_comp.add_vline(x=var95_unh, line_width=2, line_dash="dash", line_color="#DC2626", annotation_text="Unhedged 95th pct.")
+        fig_comp.add_vline(x=var95_hed, line_width=2, line_dash="dash", line_color="#16A34A", annotation_text="Hedged 95th pct.")
 
         fig_comp.update_layout(
             title="<b>Cash Outflow Distribution: Unhedged vs Hedged</b>",
@@ -468,38 +562,45 @@ with tab3:
     comp_table = pd.DataFrame([
         {
             "Performance Metric": "Expected Outflow (Mean)",
-            "Unhedged (0% Hedged)": f"₹{mean_unh:,.2f} Cr",
+            "Unhedged": f"₹{mean_unh:,.2f} Cr",
             f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{mean_hed:,.2f} Cr",
-            "Variance / Impact": f"₹{(mean_hed - mean_unh):,.2f} Cr",
-            "Managerial Takeaway": "CIRP forward pricing is expected-cost neutral"
+            "Difference (Hedged - Unhedged)": f"₹{mean_hed - mean_unh:+,.2f} Cr",
+            "Interpretation": "Average modeled cash cost; not a guarantee of the final payment."
         },
         {
-            "Performance Metric": "Cash Flow Volatility (Std Dev)",
-            "Unhedged (0% Hedged)": f"₹{std_unh:,.2f} Cr",
+            "Performance Metric": "Cash Flow Std. Deviation",
+            "Unhedged": f"₹{std_unh:,.2f} Cr",
             f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{std_hed:,.2f} Cr",
-            "Variance / Impact": f"-{vol_reduction_pct:.1f}%",
-            "Managerial Takeaway": f"Directly cuts cash flow volatility by {hedge_ratio:.0%}"
+            "Difference (Hedged - Unhedged)": f"₹{std_hed - std_unh:+,.2f} Cr",
+            "Interpretation": f"Standard deviation is {std_reduction_pct:.1f}% lower under the modeled hedge."
         },
         {
-            "Performance Metric": "95% Value at Risk (VaR 95%)",
-            "Unhedged (0% Hedged)": f"₹{var95_unh:,.2f} Cr",
+            "Performance Metric": "95th-Percentile Outflow",
+            "Unhedged": f"₹{var95_unh:,.2f} Cr",
             f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{var95_hed:,.2f} Cr",
-            "Variance / Impact": f"Savings of ₹{var95_savings_cr:,.2f} Cr",
-            "Managerial Takeaway": "Protects operating margins in 95 out of 100 scenarios"
+            "Difference (Hedged - Unhedged)": f"₹{var95_hed - var95_unh:+,.2f} Cr",
+            "Interpretation": "About 5% of simulated outflows exceed this threshold."
         },
         {
-            "Performance Metric": "Cash Flow at Risk (95% Tail Spike)",
-            "Unhedged (0% Hedged)": f"₹{cfar95_unh:,.2f} Cr",
-            f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{cfar95_hed:,.2f} Cr",
-            "Variance / Impact": f"-{(1 - cfar95_hed/cfar95_unh)*100:.1f}%",
-            "Managerial Takeaway": "Compresses unexpected budget spikes above expected cost"
+            "Performance Metric": "95% Expected Shortfall (Worst 5% Mean)",
+            "Unhedged": f"₹{es95_unh:,.2f} Cr",
+            f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{es95_hed:,.2f} Cr",
+            "Difference (Hedged - Unhedged)": f"₹{es95_hed - es95_unh:+,.2f} Cr",
+            "Interpretation": "Average outflow among scenarios at or above each case's 95th percentile."
         },
         {
-            "Performance Metric": "Worst-Case Simulated Outflow",
-            "Unhedged (0% Hedged)": f"₹{max_unh:,.2f} Cr",
+            "Performance Metric": "99th-Percentile Outflow",
+            "Unhedged": f"₹{var99_unh:,.2f} Cr",
+            f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{var99_hed:,.2f} Cr",
+            "Difference (Hedged - Unhedged)": f"₹{var99_hed - var99_unh:+,.2f} Cr",
+            "Interpretation": "A more extreme high-cost threshold than the 95th percentile."
+        },
+        {
+            "Performance Metric": "Maximum Simulated Outflow",
+            "Unhedged": f"₹{max_unh:,.2f} Cr",
             f"Hedged ({hedge_ratio:.0%} Forward)": f"₹{max_hed:,.2f} Cr",
-            "Variance / Impact": f"Savings of ₹{worst_case_savings_cr:,.2f} Cr",
-            "Managerial Takeaway": "Shields the firm against catastrophic currency collapse"
+            "Difference (Hedged - Unhedged)": f"₹{max_hed - max_unh:+,.2f} Cr",
+            "Interpretation": "Largest outflow observed in this simulation sample; not an absolute worst case."
         }
     ])
     st.table(comp_table)
@@ -520,12 +621,17 @@ with tab4:
     with ci2:
         st.metric("Total Equity Base", "₹83,982 Cr", "₹839,820 Million")
     with ci3:
-        st.metric("Debt-to-Equity Ratio", "-0.005", "Negative Net Debt")
+        net_debt_equity_pct = (-423.0 / 83982.0) * 100.0
+        st.metric("Net Debt / Equity", f"{net_debt_equity_pct:.2f}%", "Using stated net debt of -₹423 Cr")
     with ci4:
         st.metric("Debt Mutual Fund Assets", "₹53,320 Cr", "₹533,203 Million (Treasury)")
 
     st.markdown("---")
-    st.subheader("2. Empirical Interest Rate Sensitivity Calculation")
+    st.subheader("2. Simplified One-Year Interest / Yield Sensitivity")
+    st.caption(
+        "This slider estimates principal × rate change for one year. It is not a duration-based market-value "
+        "calculation for the mutual-fund portfolio and does not model instrument-level repricing or cash-flow timing."
+    )
 
     borrowings_m = 331.0
     debt_mf_m = 533203.0
@@ -543,14 +649,14 @@ with tab4:
         {
             "Balance Sheet Item": "Borrowings (Liability Debt Service)",
             "Disclosed Value (FY24)": f"₹{borrowings_m:,.1f} M (₹{borrowings_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Rate Shift Impact": f"₹{debt_impact_cr:,.2f} Crore / year",
+            f"{bps_shift} bps Simple Annual Interest Impact": f"₹{debt_impact_cr:,.2f} Crore / year",
             "% of Net Profit (PAT)": f"{debt_pat_pct:.4f}%",
             "Hedging Conclusion": "Negligible liability risk. Interest Rate Swaps (IRS) are economically unjustified."
         },
         {
             "Balance Sheet Item": "Debt Mutual Fund Investments (Treasury Assets)",
             "Disclosed Value (FY24)": f"₹{debt_mf_m:,.1f} M (₹{debt_mf_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Rate Shift Impact": f"₹{treasury_impact_cr:,.2f} Crore / year",
+            f"{bps_shift} bps Simple Annual Yield Sensitivity": f"₹{treasury_impact_cr:,.2f} Crore / year",
             "% of Net Profit (PAT)": f"{treasury_pat_pct:.2f}%",
             "Hedging Conclusion": "Significant treasury asset yield sensitivity (disclosed in Note 33.2)."
         }
@@ -558,9 +664,8 @@ with tab4:
     st.table(ir_comp)
 
     st.info("""
-    **Academic Limitation & Project Conclusion:**  
-    Maruti Suzuki is a **net cash surplus company**. Inventing artificial debt or proposing liability interest rate swaps would contradict official company facts. 
-    As required by the assignment guidelines, we report this structural reality directly rather than manufacturing artificial debt exposure.
+    **Interpretation and limitation:**  
+    Maruti Suzuki is represented here as a net-cash company, so borrowing-rate sensitivity appears small compared with the simple annual yield sensitivity shown for treasury investments. This does not prove that the mutual-fund portfolio's market value moves by the same amount. A proper portfolio valuation sensitivity would require fund composition, duration, repricing and cash-flow data. An interest-rate swap should only be recommended if a material, identifiable exposure justifies it.
     """)
 
 
