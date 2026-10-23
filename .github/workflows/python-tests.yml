@@ -1,0 +1,27 @@
+name: Python checks
+
+on:
+  push:
+    branches:
+      - main
+      - improve-financial-risk-metrics
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip numpy pandas streamlit plotly
+      - name: Compile Python files
+        run: python -m py_compile app.py risk_math.py tests/test_risk_math.py
+      - name: Run risk model tests
+        run: python -m unittest discover -s tests -v

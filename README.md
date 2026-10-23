@@ -1,125 +1,123 @@
-# FIN7003 Derivatives and Financial Risk Management
-## Corporate FX Risk Simulation & Derivative Hedging Model (Interactive Tabbed Dashboard)
-### Company: Maruti Suzuki India Limited (MSIL)
-**Academic Context:** Group 4 | School of Management, BML Munjal University  
-**Focus:** Foreign Exchange Exposure (JPY/INR) & Derivative Hedging under Ind AS 109 / RBI Framework  
-**Primary Deliverables:** 
-- `app.py` (Full interactive Streamlit Web Dashboard with 5 tabs and real-time sliders)
-- `run_dashboard.bat` (One-click desktop launcher to open the dashboard in your default browser)
-- `maruti_risk_dashboard.html` (Standalone interactive web dashboard; double-click to open in any browser with zero installation)
-- `maruti_suzuki_risk_simulation.ipynb` (Fully executed, standalone Python simulation notebook with in-notebook tabbed widgets)
-- `requirements.txt` (Python package dependencies)
-- `README.md` (Project guide and presentation walkthrough)
-- `jpy_inr_historical_data.csv` (Market historical exchange rate dataset)
+# Maruti Suzuki FX Risk & Hedging Dashboard
 
----
+**Course:** FIN7003 — Derivatives and Financial Risk Management  
+**Company:** Maruti Suzuki India Limited (MSIL)  
+**Primary modeled exposure:** Japanese yen (JPY) payable, quoted as INR per JPY  
+**App:** Streamlit + Plotly
 
-## 1. Executive Summary & Exposure Justification
+This is an educational risk model, not Maruti Suzuki's live treasury system or a recommendation to trade derivatives. Historical company disclosures provide context; the modeled exposure amount and rate assumptions are user-controlled scenario inputs.
 
-### Why Maruti Suzuki and the Japanese Yen (JPY)?
-Maruti Suzuki India Limited (MSIL) is India's leading automobile manufacturer. Suzuki Motor Corporation (SMC), Japan, is MSIL's promoter holding a **58.19% equity stake**. Because of this operational and technological partnership, Maruti Suzuki has a structural reliance on Japan, creating significant **Foreign Exchange Transaction Exposure** denominated in the **Japanese Yen (JPY)**.
+## Run locally
 
-### Verified Official Company Disclosures (FY 2023–24)
-*Source: Maruti Suzuki India Limited Annual Integrated Report FY 2023–24 (Approved by the Board of Directors on April 26, 2024)*  
-*Official IR Portal: https://www.marutisuzuki.com/corporate/investors/company-reports*
+Use Python 3.10 or later.
 
-1. **Direct Component & Raw Material Imports (Note 44 - CIF Value of Imports):**
-   - Raw Materials & Components: **₹36,687 million (~₹3,669 Crore)**
-   - Capital Goods (Machinery & Plant): **₹15,908 million (~₹1,591 Crore)**
-   - Total CIF Imports: **₹52,595 million (~₹5,260 Crore)**
-2. **Royalty Expenses to Parent Company (Note 29 & Note 34.2):**
-   - Paid/Accrued to Suzuki Motor Corporation, Japan: **₹49,080 million (~₹4,908 Crore)**
-3. **Balance Sheet Unhedged Monetary Liabilities (Note 33.2):**
-   - Gross foreign currency liabilities in JPY: **₹5,668 million (Standalone)** / **₹9,065 million (Consolidated)**
-   - Derivative forward hedges: **₹(2,181) million** (hedging ~38.5% of gross balance sheet liabilities)
-   - Net unhedged balance sheet JPY liabilities: **₹3,487 million**
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
 
-### Direction and Mechanism of Risk
-* **Risk Direction:** Maruti Suzuki is **Short JPY / Long INR** on its operational payables and royalty commitments.
-* **Impact of Market Movement:**
-  * If the **Japanese Yen appreciates against INR** (higher INR per JPY), MSIL requires more Indian Rupees to pay for Japanese components and royalties. This directly drives up the Cost of Materials Consumed, squeezing Gross Margins, Operating EBITDA, and Net Profit.
-  * If the **Japanese Yen depreciates against INR**, procurement costs decrease, expanding margins.
-* **Natural Hedge Limitations:** While MSIL earns foreign exchange from exports (₹163,010 million in FY24), export revenues are primarily invoiced in **USD and EUR**, while the heavy component import and royalty costs are in **JPY**, creating an active currency mismatch.
+The app expects `risk_math.py` and `jpy_inr_historical_data.csv` to be in the same folder as `app.py`.
 
----
+Run the unit tests from the repository root:
 
-## 2. Interactive Dashboard Format & Tabs Overview
+```bash
+python -m unittest discover -s tests -v
+```
 
-The dashboard is structured into **4 focused tabs**:
+## Dashboard sections
 
-### 📊 Tab 1: Executive Overview & MSIL Disclosures
-- Complete corporate structure (58.19% Suzuki Motor Corporation stake).
-- Summary of verified disclosures from Notes 44, 29, 34, and 33.
-- Exposure direction (Short JPY / Long INR) and why vehicle exports in USD/EUR do not offset JPY import liabilities.
-- Breakdown of Transaction, Translation, and Economic exposure.
+### 1. Executive Summary & Disclosures
 
-### 🎲 Tab 2: Monte Carlo Exchange Rate Simulation
-- Geometric Brownian Motion (GBM) simulation engine (1,000 paths over 252 trading days).
-- Drift derived from Covered Interest Rate Parity (CIRP) using Indian and Japanese sovereign rates (6.50% vs 0.25%).
-- Volatility calibrated to 15.0% based on 3-year daily historical market returns.
-- Interactive Plotly chart showing price trajectories, Mean Path, Initial Spot $S_0$, Forward Rate $F$, and 95th percentile adverse rate.
-- Lognormal terminal distribution histogram with density curve.
+Summarizes historical company disclosures, explains why JPY payables can create transaction exposure, and distinguishes transaction, translation and economic exposure. The annual-report figures shown in this section are background information; they do not automatically determine the scenario exposure entered in the sidebar.
 
-### 🛡️ Tab 3: Hedging Analysis & Payoff Comparison
-- 1-Year OTC Currency Forward Contract (Long JPY / Short INR).
-- Interactive Hedge Ratio slider (0% to 100%).
-- Key metric cards: Expected Outflow (Mean), Cash Flow Volatility (Std Dev), 95% Value at Risk (VaR), and Worst-Case Outflow.
-- Comparative distribution histograms (Unhedged vs Hedged).
-- Cumulative Distribution Function (CDF) showing tail-risk compression.
-- Comprehensive statistical performance matrix.
+Before using figures in a presentation, verify the annual-report period, note number, standalone versus consolidated scope, units and denomination against the source. Imports can involve multiple currencies; the dashboard simplifies the exposure to one JPY payable.
 
-### 🏦 Tab 4: Interest Rate Sensitivity & Capital Structure
-- Evaluates Maruti Suzuki's debt profile from Note 33.1 & 33.3:
-  - Total Borrowings: Only **₹331 million (₹33.1 Crore)**.
-  - Shareholders' Equity: **₹83,982 Crore**.
-  - Surplus Debt Mutual Funds: **₹53,320 Crore** (Net Cash Surplus).
-- Interactive basis-points sensitivity slider: A 100 bps rate increase changes debt service by just **₹0.33 Crore** (0.002% of profit). In contrast, a 100 bps shift on treasury investments impacts yield by **₹533.2 Crore**.
-- Explains why liability interest rate swaps are economically unjustified, addressing the assignment's limitation requirement.
+### 2. Monte Carlo Exchange Rate Simulation
 
----
+Generates daily JPY/INR paths over 252 trading days using Geometric Brownian Motion:
 
-## 3. How to Launch & Run the Dashboard
+```text
+S(t+dt) = S(t) * exp(((r_INR - r_JPY) - 0.5*sigma^2)*dt
+                       + sigma*sqrt(dt)*Z)
+```
 
-You have **3 convenient ways** to run the model:
+where `Z` is a standard-normal random shock, `sigma` is annualized volatility, and `dt = 1/252` for the one-year/252-step model.
 
-### Method 1: One-Click Desktop Launcher (Streamlit App)
-Double-click [**`run_dashboard.bat`**](file:///c:/Users/Aviral/Downloads/derivtive%20project/run_dashboard.bat).  
-It will automatically launch the Streamlit server and open the interactive dashboard in your default browser at `http://localhost:8501`.
+The one-year forward benchmark uses a continuously compounded covered-interest-parity approximation:
 
-*(Alternatively, run from terminal:* `streamlit run app.py`*)*
+```text
+F = S0 * exp((r_INR - r_JPY) * T)
+```
 
-### Method 2: Standalone Interactive HTML Dashboard (Zero Installation)
-Double-click [**`maruti_risk_dashboard.html`**](file:///c:/Users/Aviral/Downloads/derivtive%20project/maruti_risk_dashboard.html).  
-It opens immediately in Google Chrome, Microsoft Edge, or Safari with tabs, interactive sliders, dynamic charts, and calculations running live inside the browser.
+The sidebar supports two volatility modes:
 
-### Method 3: Jupyter Notebook with Embedded Tabbed Widget
-Open [**`maruti_suzuki_risk_simulation.ipynb`**](file:///c:/Users/Aviral/Downloads/derivtive%20project/maruti_suzuki_risk_simulation.ipynb) in VS Code or Jupyter Notebook.  
-Section I contains an interactive tabbed widget (`ipywidgets.Tab`) that allows you to click between tabs directly inside the notebook.
+- **Manual assumption (default):** uses the volatility selected by the user; the default is 15%.
+- **Estimate from historical CSV:** computes consecutive log returns from the bundled positive JPY/INR rates and annualizes the sample standard deviation by `sqrt(252)`. It validates and sorts dates, removes duplicate dates, and skips invalid observations. This is a historical estimate from the local file, not a live data feed.
 
----
+With the bundled data currently in the project, the estimate is about **15.47% annualized** (777 usable consecutive returns). It will change if the CSV is updated.
 
-## 4. Key Findings & Baseline Results Summary
+### 3. Hedging Analysis & Payoff Comparison
 
-*Baseline: JPY 10.0 Billion Exposure | Spot S0 = ₹0.5500 / JPY | 1-Yr Forward F = ₹0.5855 / JPY | Volatility = 15.0% | Hedge Ratio = 50%*
+The modeled exposure is a JPY payable. A share `h` is hedged using a one-year forward at rate `F`; the remaining share is settled at the simulated terminal spot `ST`.
 
-| Risk Metric | Unhedged (0% Hedged) | Hedged (50% Forward) | Risk Reduction / Impact | Managerial Significance |
-| :--- | :---: | :---: | :---: | :--- |
-| **Initial Spot Value** | ₹550.00 Cr | ₹550.00 Cr | Baseline | Initial valuation at $S_0$ |
-| **Expected Outflow (Mean)** | **₹585.72 Cr** | **₹585.59 Cr** | **₹0.13 Cr (Neutral)** | CIRP forward pricing does not penalize expected returns |
-| **Cash Flow Volatility ($\sigma$)** | **₹89.21 Cr** | **₹44.61 Cr** | **-50.0%** | Variance is cut exactly in half |
-| **95% Value at Risk (VaR 95%)** | **₹743.70 Cr** | **₹664.59 Cr** | **Savings of ₹79.11 Cr** | Major downside tail-risk protection |
-| **Cash Flow at Risk (Tail Spike)** | ₹157.98 Cr | ₹78.99 Cr | -50.0% | Compresses unexpected cash spike above mean |
-| **99% Value at Risk (VaR 99%)** | ₹818.06 Cr | ₹701.78 Cr | **Savings of ₹116.29 Cr** | Defense against 1-in-100 year currency shocks |
-| **Worst-Case Simulated Outflow** | **₹892.45 Cr** | **₹738.96 Cr** | **Savings of ₹153.49 Cr** | Eliminates severe margin compression |
+```text
+Unhedged cost = N * ST / 10,000,000
 
----
+Hedged cost = (h*N*F + (1-h)*N*ST) / 10,000,000
+```
 
-## 5. File Manifest
-* `app.py`: Full interactive Streamlit Web Dashboard with 4 tabs and real-time sliders.
-* `run_dashboard.bat`: One-click Windows batch script to launch the dashboard.
-* `maruti_risk_dashboard.html`: Standalone single-file interactive HTML dashboard with tabs, sliders, and canvas charts.
-* `maruti_suzuki_risk_simulation.ipynb`: Complete executable Jupyter Notebook with all calculations, code cells, tables, embedded plots, and in-notebook tabbed widgets.
-* `requirements.txt`: Python package requirements.
-* `README.md`: Complete documentation and presentation guide.
-* `jpy_inr_historical_data.csv`: Daily historical exchange rate data for JPY/INR over 3 years.
-* `MSIL_IR_2023-24.pdf`: Downloaded official Maruti Suzuki Annual Integrated Report FY 2023–24.
+The denominator converts rupees to crore rupees. This simplified model assumes the forward exactly matches the exposure amount and maturity, and excludes transaction costs, bid/ask spreads, collateral, counterparty risk, accounting treatment and basis/timing mismatch.
+
+The app reports:
+- Mean outflow and population standard deviation.
+- 95th- and 99th-percentile outflow thresholds.
+- 95% expected shortfall: the mean of simulated outflows at or above the 95th-percentile threshold.
+- Maximum outflow observed in the finite simulation sample.
+- Comparison charts and CDF for hedged and unhedged outflows.
+
+**Metric interpretation:** A 95th-percentile outflow is a threshold exceeded by approximately 5% of simulated results. Expected shortfall describes the average high-cost tail. Maximum simulated outflow is not a theoretical worst case. The displayed standard-deviation reduction is not variance reduction.
+
+### 4. Interest Rate Sensitivity & Capital Structure
+
+Uses an adjustable positive rate shift from 25 to 250 basis points and shows a simple one-year interest/yield sensitivity for stated borrowing and treasury-investment balances. A basis point is 0.01 percentage points; 100 bps equals 1 percentage point.
+
+This calculation is principal × rate shift for one year. **It is not a duration-based estimate of mutual-fund market-value sensitivity**, nor does it model instrument repricing, portfolio mix, maturity, or cash-flow timing. Actual rate risk depends on the composition and repricing of the company's instruments.
+
+## Sidebar inputs
+
+| Input | Default | Effect |
+|---|---:|---|
+| JPY exposure | ¥10 billion | Scales modeled rupee cash flows linearly |
+| Spot rate | ₹0.5500 per JPY | Starting value of each simulated path |
+| Forward hedge ratio | 50% | Fixes the rate for that share of the payable |
+| Manual annual volatility | 15% | Controls the dispersion of simulated paths in manual mode |
+| Indian rate | 6.50% | Contributes to forward pricing and simulation drift |
+| Japanese rate | 0.25% | Contributes to forward pricing and simulation drift |
+| Simulation paths | 1,000 | Controls sampling stability of statistics |
+| Random seed | 42 | Makes results reproducible for the same code and inputs |
+
+## Improvements in this version
+
+- Centralized forward-rate, GBM, cash-flow and risk-summary formulas in `risk_math.py` so they can be tested without running the UI.
+- Added a historical-volatility option that actually reads the included CSV, while keeping the manual 15% default.
+- Replaced the old `CFaR` proxy with an explicitly named 95% expected-shortfall calculation.
+- Renamed high-outflow percentile outputs so they are not presented as loss-based VaR without a defined loss baseline.
+- Renamed standard-deviation reduction accurately, and separated it from variance reduction.
+- Distinguished a sample maximum from a theoretical worst case.
+- Corrected the net-debt/equity display to show the ratio implied by the stated net-debt input.
+- Added a chart to show simple annual interest/yield sensitivity across rate shifts.
+- Added unit tests for forward pricing, reproducible simulation, hedge edge cases, expected shortfall and historical volatility estimation.
+
+## Validation and limitations
+
+The model is conditional on its inputs and on a lognormal GBM structure. It is not a forecast guarantee. A production treasury model would also validate sourced market data, actual currency amounts and maturity dates, exposure netting, derivative quotes/costs, scenario back-testing, multiple-currency effects, and instrument-specific interest-rate risk.
+
+The company figures in the Executive Summary are historical facts as represented in the dashboard and must be checked against Maruti Suzuki's official reports before external use: [Maruti Suzuki investor reports](https://www.marutisuzuki.com/corporate/investors/company-reports).
+
+## Project files
+
+- `app.py` — Streamlit dashboard and visualizations.
+- `risk_math.py` — pure financial calculations used by the dashboard.
+- `tests/test_risk_math.py` — automated unit tests.
+- `jpy_inr_historical_data.csv` — historical JPY/INR observations used for optional volatility estimation.
+- `requirements.txt` — runtime and analysis dependencies.
