@@ -15,7 +15,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from risk_math import (
+    approximate_duration_price_change_cr,
     calculate_cash_outflows,
+    calculate_forward_execution_cost_cr,
     calculate_forward_rate,
     estimate_annualized_volatility,
     simulate_gbm,
@@ -98,7 +100,7 @@ exposure_jpy_bn = st.sidebar.number_input(
     max_value=100.0,
     value=10.0,
     step=1.0,
-    help="Default 10.0 Billion JPY reflects ~₹550-600 Crore procurement tranche or balance sheet payables."
+    help="Illustrative scenario exposure for this simulation. It is not Maruti Suzuki's actual net open position in the latest annual report."
 )
 exposure_jpy = exposure_jpy_bn * 1_000_000_000
 
@@ -118,8 +120,21 @@ hedge_ratio = st.sidebar.slider(
     max_value=100,
     value=50,
     step=5,
-    help="Percentage of JPY exposure hedged via 1-Year Currency Forward Contract."
+    help="Percentage of the modeled JPY payable whose rupee rate is fixed using a one-year forward."
 ) / 100.0
+
+forward_cost_bps = st.sidebar.slider(
+    "Assumed Forward Execution Cost (basis points)",
+    min_value=0,
+    max_value=50,
+    value=5,
+    step=1,
+    help="Illustrative extra execution cost, measured in basis points of hedged rupee notional. This is not a live bank quote."
+)
+st.sidebar.caption(
+    "A basis point is 0.01%. The forward rate already includes the modeled interest-rate differential; "
+    "this input is an additional assumed execution cost. Replace it with a dealer quote when available."
+)
 
 manual_ann_volatility = st.sidebar.slider(
     "Manual Annualized Volatility (σ)",
@@ -207,6 +222,41 @@ unhedged_jpy = exposure_jpy * (1.0 - hedge_ratio)
     forward_rate=forward_rate,
     hedge_ratio=hedge_ratio,
 )
+forward_execution_cost_cr = calculate_forward_execution_cost_cr(
+    exposure_jpy=exposure_jpy,
+    hedge_ratio=hedge_ratio,
+    forward_rate=forward_rate,
+    cost_bps=forward_cost_bps,
+)
+hedged_outflow_cr = hedged_outflow_cr + forward_execution_cost_cr
+
+# Prepare five hedge choices using the same simulated exchange rates for a fair comparison.
+hedge_scenarios = []
+for candidate_ratio in [0.0, 0.25, 0.50, 0.75, 1.0]:
+    _, candidate_base_outflow, _, _ = calculate_cash_outflows(
+        exposure_jpy=exposure_jpy,
+        terminal_rates=terminal_rates,
+        forward_rate=forward_rate,
+        hedge_ratio=candidate_ratio,
+    )
+    candidate_cost_cr = calculate_forward_execution_cost_cr(
+        exposure_jpy=exposure_jpy,
+        hedge_ratio=candidate_ratio,
+        forward_rate=forward_rate,
+        cost_bps=forward_cost_bps,
+    )
+    candidate_outflow = candidate_base_outflow + candidate_cost_cr
+    candidate_stats = summarize_outflows(candidate_outflow)
+    hedge_scenarios.append({
+        "ratio": candidate_ratio,
+        "cost_cr": candidate_cost_cr,
+        "mean_cr": candidate_stats["mean"],
+        "std_cr": candidate_stats["std"],
+        "p95_cr": candidate_stats["p95"],
+        "es95_cr": candidate_stats["es95"],
+        "p99_cr": candidate_stats["p99"],
+        "max_cr": candidate_stats["max"],
+    })
 
 # Statistical Metrics
 # Outflow percentiles are high-cost thresholds. Expected shortfall is the
@@ -233,103 +283,133 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Executive Summary & Disclosures",
     "🎲 Monte Carlo Exchange Rate Simulation",
     "🛡️ Hedging Analysis & Payoff Comparison",
-    "🏦 Interest Rate Sensitivity & Capital Structure"
+    "🏦 Capital Structure & Rate Sensitivity"
 ])
 
 # ======================================================================================
 # TAB 1: EXECUTIVE SUMMARY & DISCLOSURES
 # ======================================================================================
 with tab1:
-    st.subheader("1. Company Background & Foreign Exchange Risk Profile")
+    st.subheader("1. What is the risk, in simple language?")
     st.markdown("""
-    **Maruti Suzuki India Limited (MSIL)** is India’s largest passenger vehicle manufacturer. Suzuki Motor Corporation (SMC), Japan, 
-    serves as the holding company with a **58.19% equity stake**. This corporate relationship results in major, ongoing commercial transactions denominated in the **Japanese Yen (JPY)**.
+    Maruti Suzuki pays for some goods and services in foreign currencies. This dashboard focuses on a **JPY payable**:
+    Maruti needs yen in the future and will pay more rupees if the yen becomes more expensive.
+
+    **Important:** the ¥10 billion input in the simulation is an illustrative payment scenario. It is not the same as the
+    company's total currency position in its annual report. The annual report shows several currencies and both
+    assets (money to receive) and liabilities (money to pay).
     """)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Parent Equity Holding", "58.19%", "Suzuki Motor Corp (Japan)")
+        st.metric("Suzuki Motor Corp. holding", "58.53%", "At 31 March 2026")
     with col2:
-        st.metric("Annual Direct CIF Imports", "₹5,260 Cr", "Raw Materials & Machinery (Note 44)")
+        st.metric("JPY financial assets", "₹2,210.3 Cr", "₹22,103 million")
     with col3:
-        st.metric("Annual Royalty to SMC", "₹4,908 Cr", "Technical Fees (Note 29/34)")
+        st.metric("Gross JPY liabilities", "₹1,117.6 Cr", "₹11,176 million")
     with col4:
-        st.metric("Net Debt Position", "-₹423 Cr", "Virtually Debt-Free (Net Cash)")
+        st.metric("JPY liabilities after forwards", "₹814.8 Cr", "₹8,148 million")
 
     st.markdown("---")
-    st.subheader("2. Historical Company Disclosures (Annual Integrated Report FY 2023–24)")
-    
-    disc_df = pd.DataFrame([
+    st.subheader("2. Actual JPY balance-sheet snapshot")
+    st.caption(
+        "Figures are from the FY2025–26 annual report's foreign-currency exposure table. "
+        "Amounts below are reported in ₹ million and then explained in ₹ crore."
+    )
+    actual_fx_df = pd.DataFrame([
         {
-            "Financial Statement Schedule": "Note 44: CIF Value of Imports",
-            "Item": "Raw Materials, Components & Capital Goods",
-            "Reported Value (FY 2023-24)": "₹52,595 Million (~₹5,260 Cr)",
-            "Currency / Exposure Details": "Aggregate import value across categories; not all imports are JPY-denominated. JPY is the currency modeled separately below."
+            "What the report shows": "JPY financial assets (money due to the company)",
+            "31 Mar 2026 (₹ million)": 22103,
+            "31 Mar 2025 (₹ million)": 20124,
+            "Simple meaning": "JPY-denominated balances the company expects to receive or holds."
         },
         {
-            "Financial Statement Schedule": "Note 29 & Note 34.2: Related Party Expenses",
-            "Item": "Technical Royalty to Suzuki Motor Corp (Japan)",
-            "Reported Value (FY 2023-24)": "₹49,080 Million (~₹4,908 Cr)",
-            "Currency / Exposure Details": "Related-party royalty expense. Verify contractual settlement currency before treating the full amount as a JPY payable."
+            "What the report shows": "Gross JPY liabilities (money the company must pay)",
+            "31 Mar 2026 (₹ million)": 11176,
+            "31 Mar 2025 (₹ million)": 8810,
+            "Simple meaning": "JPY-denominated payables before the listed forward contracts."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Foreign Currency Risk Exposure",
-            "Item": "Gross Foreign Currency Payables (Standalone)",
-            "Reported Value (FY 2023-24)": "₹5,668 Million (JPY Payables)",
-            "Currency / Exposure Details": "JPY 10.28 Billion gross payables at closing spot rate"
+            "What the report shows": "Less: forwards against JPY liabilities",
+            "31 Mar 2026 (₹ million)": -3028,
+            "31 Mar 2025 (₹ million)": -3491,
+            "Simple meaning": "Existing contracts that reduce the yen liability exposure."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Derivative Contracts Outstanding",
-            "Item": "Forward Exchange Contracts (Hedged Payables)",
-            "Reported Value (FY 2023-24)": "₹(2,181) Million (in JPY)",
-            "Currency / Exposure Details": "MSIL hedged ~38.5% of gross JPY liabilities as of March 31, 2024"
+            "What the report shows": "JPY liabilities after forwards",
+            "31 Mar 2026 (₹ million)": 8148,
+            "31 Mar 2025 (₹ million)": 5319,
+            "Simple meaning": "Liabilities left after subtracting the listed forward contracts."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Net Unhedged Payables",
-            "Item": "Net Open Liability Exposure (Standalone)",
-            "Reported Value (FY 2023-24)": "₹3,487 Million (JPY Net Open)",
-            "Currency / Exposure Details": "₹5,034 Million on consolidated group basis"
+            "What the report shows": "Net JPY asset position (assets minus liabilities after forwards)",
+            "31 Mar 2026 (₹ million)": 13955,
+            "31 Mar 2025 (₹ million)": 14805,
+            "Simple meaning": "On this balance-sheet snapshot, JPY assets exceed the remaining JPY liabilities."
         }
     ])
-    st.table(disc_df)
+    st.dataframe(actual_fx_df, use_container_width=True, hide_index=True)
 
+    st.info(
+        "Why this matters: at 31 March 2026, reported JPY assets exceeded reported JPY liabilities after forward "
+        "contracts by about ₹1,395.5 crore. That means the year-end balance-sheet snapshot is a net JPY asset position. "
+        "The separate payable simulation below studies a future JPY payment; it should not be described as the company's "
+        "total net currency position."
+    )
+
+    st.subheader("3. What did the annual report say about currency sensitivity?")
+    sens1, sens2 = st.columns(2)
+    with sens1:
+        st.metric("If the rupee strengthens by 10%", "-₹139.6 Cr", "Reported JPY impact on profit/loss")
+    with sens2:
+        st.metric("If the rupee weakens by 10%", "+₹139.6 Cr", "Reported JPY impact on profit/loss")
     st.caption(
-        "Historical company disclosures shown above are context, not live data. The ¥10 billion simulation "
-        "exposure, spot rate, volatility and rates are model inputs; the selected notional is not asserted to be "
-        "Maruti Suzuki's actual open treasury position. Imports and receipts can involve several currencies."
+        "This is the company's reported sensitivity for outstanding JPY monetary items at year-end, not a forecast. "
+        "The report gives the impact in ₹ million (−1,396 / +1,396), equal to approximately ₹139.6 crore."
     )
     st.markdown(
-        "Source: [Maruti Suzuki investor reports](https://www.marutisuzuki.com/corporate/investors/company-reports). "
-        "Confirm the specific note, reporting scope (standalone/consolidated), currency and period before presenting figures."
+        "Source: [Maruti Suzuki official annual reports](https://www.marutisuzuki.com/corporate/investors/company-reports) "
+        "— Annual Integrated Report FY2025–26, standalone financial statements, foreign currency risk exposure and sensitivity."
     )
+
     st.markdown("---")
-    st.subheader("3. Direction and Nature of Risk")
+    st.subheader("4. Three kinds of currency risk")
     c_a, c_b, c_c = st.columns(3)
     with c_a:
-        st.info("""
-        **Risk Direction: Short JPY / Long INR**  
-        MSIL has payment obligations in JPY.  
-        * **JPY Appreciation (Upward Spike):** MSIL requires more INR to settle imports, eroding gross margins and operating EBITDA.  
-        * **JPY Depreciation:** Procurement costs decrease, benefiting profitability.
-        """)
+        st.info(
+            "**Transaction risk**\n\nA bill must be paid or received later. If the exchange rate changes before settlement, "
+            "the amount in rupees changes. This is what the JPY payable simulation focuses on."
+        )
     with c_b:
-        st.warning("""
-        **Natural Hedge Limitations**  
-        Export receipts and foreign-currency payments may be denominated in different currencies. USD/EUR receipts do not automatically offset a JPY payable. A valid natural hedge must match currency, amount and settlement timing. Use actual invoice/treasury data to quantify the remaining net exposure.
-        """)
+        st.info(
+            "**Translation risk**\n\nForeign-currency balances are converted into rupees for financial reporting. "
+            "The reported rupee value can change even when the foreign-currency amount does not."
+        )
     with c_c:
-        st.success("""
-        **Exposure Classification**  
-        * **Transaction Exposure:** Contractual JPY import invoices & royalty payments due within 1 year (Subject of this simulation).  
-        * **Translation Exposure:** Balance sheet revaluation under Ind AS 21.  
-        * **Economic Exposure:** Long-term cost competitiveness vs domestic peers.
-        """)
+        st.info(
+            "**Economic risk**\n\nCurrency movements can change future component costs, prices and competitiveness. "
+            "A simple one-year cash-flow simulation cannot capture every long-term business effect."
+        )
+
+    st.subheader("5. How to use the dashboard")
+    st.markdown("""
+    1. Set the size of the illustrative yen payment and the market assumptions in the left-hand controls.
+    2. Open **Monte Carlo Simulation** to see many possible exchange-rate outcomes—not one guaranteed prediction.
+    3. Open **Hedging Analysis** to compare a payment with no hedge against different forward hedge percentages.
+    4. Use the cost and risk comparison to discuss which choice fits a budget limit.
+    5. Open **Capital Structure & Rate Sensitivity** to see the separate interest-rate scenario and its assumptions.
+    """)
 
 # ======================================================================================
 # TAB 2: MONTE CARLO SIMULATION
 # ======================================================================================
 with tab2:
-    st.subheader("1-Year Monte Carlo Exchange Rate Simulation (GBM Engine)")
+    st.subheader("1-Year Monte Carlo Exchange Rate Simulation")
+    st.markdown(
+        "In simple language, Monte Carlo repeats the calculation many times with different random market movements. "
+        "Each path is one possible year for JPY/INR. The model does not know the future exchange rate and does not promise "
+        "that any one path will happen."
+    )
     st.markdown(f"""
     Simulating **{num_paths:,} independent price trajectories** over **252 trading days** (1-Year Horizon) using **Geometric Brownian Motion (GBM)** with a drift based on the domestic–foreign interest-rate differential. The active annualized volatility is **{ann_volatility:.2%}** ({volatility_source.lower()}):
     $$S_{{t+\\Delta t}} = S_t \\exp\\left( \\left((r_{{\\text{{INR}}}} - r_{{\\text{{JPY}}}}) - \\frac{1}{2}\\sigma^2\\right)\\Delta t + \\sigma\\sqrt{{\\Delta t}} Z_t \\right)$$
@@ -438,39 +518,53 @@ with tab2:
 with tab3:
     st.subheader(f"Derivative Hedging Strategy: {hedge_ratio:.0%} Forward Contract Hedge")
     st.markdown(f"""
-    Maruti Suzuki enters into a **1-Year Currency Forward Contract** (Long JPY / Short INR) at $F = ₹{forward_rate:.4f}$ / JPY.
-    * **Hedged Portion:** JPY {hedged_jpy:,.0f} ({hedge_ratio:.0%}) locked at ₹{forward_locked_cost_cr:,.2f} Crore.
-    * **Unhedged Portion:** JPY {unhedged_jpy:,.0f} ({(1-hedge_ratio):.0%}) settled at variable spot $S_T$.
-    """)
+    **What this means:** the forward contract agrees today's rate for the hedged yen amount. This protects that part of the
+    payment if JPY becomes more expensive, but it also means the company cannot fully benefit if JPY becomes cheaper.
 
-    # Metric Cards
-    k1, k2, k3, k4 = st.columns(4)
+    - **Hedged amount:** JPY {hedged_jpy:,.0f} ({hedge_ratio:.0%}), locked at ₹{forward_rate:.4f} per JPY.
+    - **Unhedged amount:** JPY {unhedged_jpy:,.0f} ({(1-hedge_ratio):.0%}), paid at the future market rate in each simulated path.
+    - **Estimated extra execution cost:** ₹{forward_execution_cost_cr:,.2f} crore using the input of {forward_cost_bps} basis points.
+    """)
+    st.caption(
+        "The execution cost is illustrative because no bank quote was provided. The forward rate already includes the "
+        "modeled interest-rate difference; do not add the forward premium again as a separate fee."
+    )
+
+    # Main hedge KPIs
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
-        st.metric(
-            "Expected Outflow (Mean)",
+        k1.metric(
+            "Average Payment",
             f"₹{mean_hed:,.2f} Cr",
-            f"Difference vs unhedged: ₹{mean_hed - mean_unh:+,.2f} Cr",
+            f"vs no hedge: ₹{mean_hed - mean_unh:+,.2f} Cr",
             delta_color="inverse"
         )
     with k2:
-        st.metric(
-            "Cash Flow Std. Deviation",
-            f"₹{std_hed:,.2f} Cr",
-            f"{std_reduction_pct:.1f}% lower than unhedged",
-            delta_color="inverse"
+        k2.metric(
+            "Extra Hedge Cost",
+            f"₹{forward_execution_cost_cr:,.2f} Cr",
+            f"{forward_cost_bps} bps assumed",
+            help="Illustrative execution cost; replace with a bank/dealer quote."
         )
     with k3:
-        st.metric(
-            "95th-Pct Outflow",
-            f"₹{var95_hed:,.2f} Cr",
-            f"Reduction: ₹{var95_savings_cr:,.2f} Cr",
+        k3.metric(
+            "Cash-Flow Variability",
+            f"₹{std_hed:,.2f} Cr",
+            f"{std_reduction_pct:.1f}% lower than no hedge",
             delta_color="inverse"
         )
     with k4:
-        st.metric(
-            "Maximum Simulated Outflow",
+        k4.metric(
+            "95th-Pct Payment",
+            f"₹{var95_hed:,.2f} Cr",
+            f"Change: ₹{var95_hed - var95_unh:+,.2f} Cr",
+            delta_color="inverse"
+        )
+    with k5:
+        k5.metric(
+            "Largest Simulated Payment",
             f"₹{max_hed:,.2f} Cr",
-            f"Difference: ₹{max_outflow_difference_cr:,.2f} Cr",
+            f"vs no hedge: ₹{max_hed - max_unh:+,.2f} Cr",
             delta_color="inverse"
         )
 
@@ -593,103 +687,196 @@ with tab3:
     ])
     st.table(comp_table)
 
+    st.markdown("---")
+    st.subheader("Compare five hedge choices")
+    st.markdown(
+        "This table reuses the same simulated exchange rates for every option. That makes the comparison fair: "
+        "only the hedge percentage and its assumed execution cost change."
+    )
+    scenario_display = pd.DataFrame([
+        {
+            "Hedge %": f"{row['ratio']:.0%}",
+            "Extra execution cost (₹ Cr)": round(row["cost_cr"], 2),
+            "Average payment (₹ Cr)": round(row["mean_cr"], 2),
+            "95th-percentile payment (₹ Cr)": round(row["p95_cr"], 2),
+            "Worst-5%-average payment (₹ Cr)": round(row["es95_cr"], 2),
+            "Cash-flow standard deviation (₹ Cr)": round(row["std_cr"], 2),
+            "Largest simulated payment (₹ Cr)": round(row["max_cr"], 2),
+        }
+        for row in hedge_scenarios
+    ])
+    st.dataframe(scenario_display, use_container_width=True, hide_index=True)
+
+    fig_tradeoff = make_subplots(specs=[[{"secondary_y": True}]])
+    candidate_percentages = [row["ratio"] * 100 for row in hedge_scenarios]
+    fig_tradeoff.add_trace(
+        go.Bar(
+            x=candidate_percentages,
+            y=[row["p95_cr"] for row in hedge_scenarios],
+            name="95th-percentile payment (₹ Cr)",
+        ),
+        secondary_y=False,
+    )
+    fig_tradeoff.add_trace(
+        go.Scatter(
+            x=candidate_percentages,
+            y=[row["cost_cr"] for row in hedge_scenarios],
+            mode="lines+markers",
+            name="Extra execution cost (₹ Cr)",
+        ),
+        secondary_y=True,
+    )
+    fig_tradeoff.update_layout(
+        title="Risk and cost: how the hedge percentage changes the result",
+        xaxis_title="Forward hedge ratio (%)",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(l=40, r=40, t=55, b=80),
+        height=400,
+    )
+    fig_tradeoff.update_yaxes(title_text="95th-percentile payment (₹ crore)", secondary_y=False)
+    fig_tradeoff.update_yaxes(title_text="Assumed execution cost (₹ crore)", secondary_y=True)
+    st.plotly_chart(fig_tradeoff, use_container_width=True)
+
+    st.subheader("Simple decision helper")
+    p95_values = [row["p95_cr"] for row in hedge_scenarios]
+    lower_limit = float(np.floor(min(p95_values) * 2.0) / 2.0)
+    upper_limit = float(np.ceil(max(p95_values) * 2.0) / 2.0)
+    if upper_limit <= lower_limit:
+        upper_limit = lower_limit + 0.5
+    matching_current = min(hedge_scenarios, key=lambda row: abs(row["ratio"] - hedge_ratio))
+    default_limit = float(np.clip(round(matching_current["p95_cr"] * 2.0) / 2.0, lower_limit, upper_limit))
+    max_95_payment = st.slider(
+        "What is the highest 95th-percentile payment you are willing to plan for? (₹ crore)",
+        min_value=lower_limit,
+        max_value=upper_limit,
+        value=default_limit,
+        step=0.5,
+        help="This is a budget/risk limit you choose. It is not supplied by Maruti Suzuki."
+    )
+    qualifying = [row for row in hedge_scenarios if row["p95_cr"] <= max_95_payment]
+    if qualifying:
+        preferred = min(qualifying, key=lambda row: row["cost_cr"])
+        st.success(
+            f"Among the five tested choices, **{preferred['ratio']:.0%} hedge** has the lowest estimated "
+            f"execution cost (₹{preferred['cost_cr']:.2f} crore) while keeping the 95th-percentile payment at "
+            f"₹{preferred['p95_cr']:.2f} crore, within your selected limit."
+        )
+    else:
+        most_protective = min(hedge_scenarios, key=lambda row: row["p95_cr"])
+        st.warning(
+            f"None of the five tested choices meets that limit. The lowest 95th-percentile payment in this grid "
+            f"is ₹{most_protective['p95_cr']:.2f} crore at a {most_protective['ratio']:.0%} hedge. "
+            "Consider revising the limit or assumptions and reviewing the required hedge with treasury."
+        )
+    st.caption(
+        "This helper compares only 0%, 25%, 50%, 75% and 100% hedges. It is a learning aid, not an automatic "
+        "treasury recommendation. A real decision needs verified payment timing, actual currency exposure and a dealer quote."
+    )
+
 # ======================================================================================
-# TAB 4: INTEREST RATE SENSITIVITY & CAPITAL STRUCTURE
+# TAB 4: CAPITAL STRUCTURE & INTEREST-RATE SENSITIVITY
 # ======================================================================================
 with tab4:
-    st.subheader("1. Maruti Suzuki Capital Structure & Debt Assessment (Note 33.1 & 33.3)")
+    st.subheader("1. What does Maruti's latest report tell us?")
     st.markdown("""
-    A core requirement of financial risk analysis is evaluating whether interest rate hedging is necessary. 
-    Maruti Suzuki's audited financial disclosures demonstrate an extraordinary capital structure:
+    Maruti Suzuki's FY2025–26 report says the company had no long-term borrowings at year-end, can use short-term rupee
+    borrowing for cash-flow mismatches, and holds a large portfolio of debt mutual funds. So we should not invent a
+    large loan just to demonstrate an interest-rate hedge. This section shows an illustrative sensitivity of the
+    investment portfolio to a change in market yields.
     """)
 
     ci1, ci2, ci3, ci4 = st.columns(4)
     with ci1:
-        st.metric("Total Debt Borrowings", "₹33.1 Cr", "₹331 Million (Note 33.1)")
+        st.metric("Net worth (FY26)", "₹1,05,109.8 Cr", "₹1,051,098 million")
     with ci2:
-        st.metric("Total Equity Base", "₹83,982 Cr", "₹839,820 Million")
+        st.metric("Debt mutual funds (FY26)", "₹71,723.8 Cr", "Current + non-current investments")
     with ci3:
-        net_debt_equity_pct = (-423.0 / 83982.0) * 100.0
-        st.metric("Net Debt / Equity", f"{net_debt_equity_pct:.2f}%", "Using stated net debt of -₹423 Cr")
+        st.metric("Long-term borrowings", "None reported", "At 31 March 2026")
     with ci4:
-        st.metric("Debt Mutual Fund Assets", "₹53,320 Cr", "₹533,203 Million (Treasury)")
+        st.metric("Reported NAV sensitivity", "₹717.2 Cr", "For a 1% NAV movement")
+
+    st.markdown(
+        "Source: [Maruti Suzuki official annual reports](https://www.marutisuzuki.com/corporate/investors/company-reports) "
+        "— Annual Integrated Report FY2025–26. The report states that a 1% change in NAV of mutual-fund investments "
+        "would change profit by ₹7,172 million (about ₹717.2 crore)."
+    )
 
     st.markdown("---")
-    st.subheader("2. Simplified One-Year Interest / Yield Sensitivity")
+    st.subheader("2. Try an interest-rate change")
     st.caption(
-        "This slider estimates principal × rate change for one year. It is not a duration-based market-value "
-        "calculation for the mutual-fund portfolio and does not model instrument-level repricing or cash-flow timing."
+        "A simple finance rule: when market yields rise, the prices of existing fixed-income investments usually fall. "
+        "The duration formula below estimates that effect. The report does not provide one single duration for this "
+        "whole portfolio, so duration is a user-set assumption—not a reported company figure."
     )
 
-    borrowings_m = 331.0
-    debt_mf_m = 533203.0
-    pat_m = 132094.0
-
-    bps_shift = st.slider("Select Interest Rate Shift (basis points)", min_value=25, max_value=250, value=100, step=25)
-    shift_dec = bps_shift / 10000.0
-
-    debt_impact_cr = (borrowings_m * shift_dec) / 10.0
-    treasury_impact_cr = (debt_mf_m * shift_dec) / 10.0
-    debt_pat_pct = (borrowings_m * shift_dec / pat_m) * 100.0
-    treasury_pat_pct = (debt_mf_m * shift_dec / pat_m) * 100.0
-
-    ir_comp = pd.DataFrame([
-        {
-            "Balance Sheet Item": "Borrowings (Liability Debt Service)",
-            "Disclosed Value (FY24)": f"₹{borrowings_m:,.1f} M (₹{borrowings_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Simple Annual Interest Impact": f"₹{debt_impact_cr:,.2f} Crore / year",
-            "% of Net Profit (PAT)": f"{debt_pat_pct:.4f}%",
-            "Hedging Conclusion": "Negligible liability risk. Interest Rate Swaps (IRS) are economically unjustified."
-        },
-        {
-            "Balance Sheet Item": "Debt Mutual Fund Investments (Treasury Assets)",
-            "Disclosed Value (FY24)": f"₹{debt_mf_m:,.1f} M (₹{debt_mf_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Simple Annual Yield Sensitivity": f"₹{treasury_impact_cr:,.2f} Crore / year",
-            "% of Net Profit (PAT)": f"{treasury_pat_pct:.2f}%",
-            "Hedging Conclusion": "Significant treasury asset yield sensitivity (disclosed in Note 33.2)."
-        }
-    ])
-    st.table(ir_comp)
-
-    # Show how the simplified annual cash-flow sensitivity scales with the selected rate shift.
-    sensitivity_bps = np.arange(25, 251, 25)
-    sensitivity_shift = sensitivity_bps / 10000.0
-    debt_sensitivity = (borrowings_m * sensitivity_shift) / 10.0
-    treasury_sensitivity = (debt_mf_m * sensitivity_shift) / 10.0
-
-    fig_sensitivity = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_sensitivity.add_trace(
-        go.Scatter(
-            x=sensitivity_bps,
-            y=debt_sensitivity,
-            mode="lines+markers",
-            name="Borrowings (₹ crore/year)",
-        ),
-        secondary_y=False,
+    portfolio_value_cr = 71723.8
+    bps_shift = st.slider(
+        "Change in market yield (basis points)",
+        min_value=-250,
+        max_value=250,
+        value=100,
+        step=25,
+        help="Positive means yields rise; negative means yields fall. 100 basis points = 1 percentage point."
     )
-    fig_sensitivity.add_trace(
-        go.Scatter(
-            x=sensitivity_bps,
-            y=treasury_sensitivity,
-            mode="lines+markers",
-            name="Treasury investments (₹ crore/year)",
-        ),
-        secondary_y=True,
+    assumed_duration = st.slider(
+        "Assumed modified duration of the portfolio (years)",
+        min_value=0.25,
+        max_value=5.0,
+        value=1.0,
+        step=0.25,
+        help="Use fund factsheets to estimate this more precisely. The default 1 year is illustrative, not a reported value."
     )
-    fig_sensitivity.update_layout(
-        title="Simple Annual Interest / Yield Sensitivity by Rate Shift",
-        xaxis_title="Rate shift (basis points)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
-        margin=dict(l=40, r=40, t=55, b=80),
-        height=380,
-    )
-    fig_sensitivity.update_yaxes(title_text="Borrowings impact (₹ crore/year)", secondary_y=False)
-    fig_sensitivity.update_yaxes(title_text="Treasury yield sensitivity (₹ crore/year)", secondary_y=True)
-    st.plotly_chart(fig_sensitivity, use_container_width=True)
 
-    st.info("""
-    **Interpretation and limitation:**  
-    Maruti Suzuki is represented here as a net-cash company, so borrowing-rate sensitivity appears small compared with the simple annual yield sensitivity shown for treasury investments. This does not prove that the mutual-fund portfolio's market value moves by the same amount. A proper portfolio valuation sensitivity would require fund composition, duration, repricing and cash-flow data. An interest-rate swap should only be recommended if a material, identifiable exposure justifies it.
+    estimated_nav_change_cr = approximate_duration_price_change_cr(
+        portfolio_value_cr=portfolio_value_cr,
+        modified_duration_years=assumed_duration,
+        rate_shift_bps=bps_shift,
+    )
+    rate_move = "yields rise" if bps_shift > 0 else "yields fall" if bps_shift < 0 else "yields do not change"
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Rate scenario", f"{bps_shift:+,} bps", rate_move.capitalize())
+    with c2:
+        st.metric("Estimated portfolio value change", f"₹{estimated_nav_change_cr:+,.2f} Cr", "Duration approximation")
+    with c3:
+        st.metric("Starting portfolio value", f"₹{portfolio_value_cr:,.1f} Cr", "FY26 debt mutual funds")
+
+    st.markdown("""
+    **Formula in plain language**
+
+    Estimated change in value ≈ − portfolio duration × change in yield × portfolio value.
+
+    For example, with a duration assumption of 1 year, a 1 percentage-point rise in yields implies an approximate
+    1% fall in portfolio value. If duration were 3 years, the same yield move would imply an approximate 3% fall.
+    This is a small-change estimate; it is not a full revaluation of the mutual-fund holdings.
     """)
 
+    rate_moves = np.arange(-250, 251, 25)
+    rate_changes = [
+        approximate_duration_price_change_cr(portfolio_value_cr, assumed_duration, move)
+        for move in rate_moves
+    ]
+    fig_rate = go.Figure()
+    fig_rate.add_trace(go.Scatter(
+        x=rate_moves,
+        y=rate_changes,
+        mode="lines+markers",
+        name="Estimated value change",
+    ))
+    fig_rate.add_vline(x=0, line_dash="dash", line_color="#64748B")
+    fig_rate.add_hline(y=0, line_dash="dash", line_color="#64748B")
+    fig_rate.update_layout(
+        title="Estimated portfolio value change under different yield scenarios",
+        xaxis_title="Change in market yield (basis points)",
+        yaxis_title="Estimated change in value (₹ crore)",
+        margin=dict(l=40, r=40, t=55, b=40),
+        height=380,
+    )
+    st.plotly_chart(fig_rate, use_container_width=True)
 
+    st.warning(
+        "Limitations: the duration is an assumption, and the portfolio contains different funds and maturities. "
+        "A precise valuation requires fund-level holdings and duration data. This model does not automatically prove "
+        "that an interest-rate swap is worthwhile. Only hedge a measurable exposure, and compare the dealer quote and "
+        "remaining risk before recommending a transaction."
+    )

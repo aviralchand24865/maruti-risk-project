@@ -6,7 +6,9 @@ import numpy as np
 import pandas as pd
 
 from risk_math import (
+    approximate_duration_price_change_cr,
     calculate_cash_outflows,
+    calculate_forward_execution_cost_cr,
     calculate_forward_rate,
     estimate_annualized_volatility,
     simulate_gbm,
@@ -49,6 +51,18 @@ class TestRiskMath(unittest.TestCase):
         self.assertAlmostEqual(stats["es95"], 98.0)
         self.assertGreaterEqual(stats["es95"], stats["p95"])
         self.assertEqual(stats["max"], 100.0)
+
+    def test_forward_execution_cost_scales_with_hedged_amount_and_bps(self):
+        cost = calculate_forward_execution_cost_cr(10_000_000_000, 0.5, 0.5855, 5)
+        self.assertAlmostEqual(cost, (10_000_000_000 * 0.5 * 0.5855 * 0.0005) / 10_000_000)
+        self.assertAlmostEqual(
+            calculate_forward_execution_cost_cr(10_000_000_000, 0.0, 0.5855, 5), 0.0
+        )
+
+    def test_duration_price_sensitivity_has_correct_direction(self):
+        # ₹1,000 crore portfolio, duration 2 years, rate +100 bps => approx -₹20 crore.
+        self.assertAlmostEqual(approximate_duration_price_change_cr(1000, 2, 100), -20.0)
+        self.assertAlmostEqual(approximate_duration_price_change_cr(1000, 2, -100), 20.0)
 
     def test_historical_volatility_estimator_uses_clean_sample_csv(self):
         dates = pd.date_range("2024-01-01", periods=80, freq="B")

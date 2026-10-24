@@ -125,3 +125,37 @@ def summarize_outflows(outflows):
         "max": float(np.max(values)),
         "es95": float(np.mean(values[values >= p95])),
     }
+
+
+
+def calculate_forward_execution_cost_cr(exposure_jpy, hedge_ratio, forward_rate, cost_bps):
+    """Estimate extra execution cost in ₹ crore as bps of the forward rupee notional.
+
+    cost_bps is an explicit user assumption, not a live dealer quote. The forward
+    rate itself already contains the modeled interest-rate differential.
+    """
+    if exposure_jpy < 0:
+        raise ValueError("exposure_jpy cannot be negative.")
+    if not 0.0 <= hedge_ratio <= 1.0:
+        raise ValueError("hedge_ratio must be between 0 and 1.")
+    if forward_rate <= 0:
+        raise ValueError("forward_rate must be positive.")
+    if cost_bps < 0:
+        raise ValueError("cost_bps cannot be negative.")
+    hedged_rupee_notional = exposure_jpy * hedge_ratio * forward_rate
+    return float(hedged_rupee_notional * (cost_bps / 10_000.0) / RUPEES_PER_CRORE)
+
+
+def approximate_duration_price_change_cr(portfolio_value_cr, modified_duration_years, rate_shift_bps):
+    """Approximate bond/fund price change from a yield move, in ₹ crore.
+
+    First-order duration approximation: change in value ≈ -duration × change in
+    yield × portfolio value. Duration is an assumption unless fund data provides it.
+    A positive rate shift therefore produces a negative estimated price change.
+    """
+    if portfolio_value_cr < 0:
+        raise ValueError("portfolio_value_cr cannot be negative.")
+    if modified_duration_years < 0:
+        raise ValueError("modified_duration_years cannot be negative.")
+    shift_decimal = rate_shift_bps / 10_000.0
+    return float(-modified_duration_years * shift_decimal * portfolio_value_cr)
