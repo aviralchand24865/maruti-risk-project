@@ -404,7 +404,12 @@ with tab1:
 # TAB 2: MONTE CARLO SIMULATION
 # ======================================================================================
 with tab2:
-    st.subheader("1-Year Monte Carlo Exchange Rate Simulation (GBM Engine)")
+    st.subheader("1-Year Monte Carlo Exchange Rate Simulation")
+    st.markdown(
+        "In simple language, Monte Carlo repeats the calculation many times with different random market movements. "
+        "Each path is one possible year for JPY/INR. The model does not know the future exchange rate and does not promise "
+        "that any one path will happen."
+    )
     st.markdown(f"""
     Simulating **{num_paths:,} independent price trajectories** over **252 trading days** (1-Year Horizon) using **Geometric Brownian Motion (GBM)** with a drift based on the domestic–foreign interest-rate differential. The active annualized volatility is **{ann_volatility:.2%}** ({volatility_source.lower()}):
     $$S_{{t+\\Delta t}} = S_t \\exp\\left( \\left((r_{{\\text{{INR}}}} - r_{{\\text{{JPY}}}}) - \\frac{1}{2}\\sigma^2\\right)\\Delta t + \\sigma\\sqrt{{\\Delta t}} Z_t \\right)$$
@@ -513,39 +518,53 @@ with tab2:
 with tab3:
     st.subheader(f"Derivative Hedging Strategy: {hedge_ratio:.0%} Forward Contract Hedge")
     st.markdown(f"""
-    Maruti Suzuki enters into a **1-Year Currency Forward Contract** (Long JPY / Short INR) at $F = ₹{forward_rate:.4f}$ / JPY.
-    * **Hedged Portion:** JPY {hedged_jpy:,.0f} ({hedge_ratio:.0%}) locked at ₹{forward_locked_cost_cr:,.2f} Crore.
-    * **Unhedged Portion:** JPY {unhedged_jpy:,.0f} ({(1-hedge_ratio):.0%}) settled at variable spot $S_T$.
-    """)
+    **What this means:** the forward contract agrees today's rate for the hedged yen amount. This protects that part of the
+    payment if JPY becomes more expensive, but it also means the company cannot fully benefit if JPY becomes cheaper.
 
-    # Metric Cards
-    k1, k2, k3, k4 = st.columns(4)
+    - **Hedged amount:** JPY {hedged_jpy:,.0f} ({hedge_ratio:.0%}), locked at ₹{forward_rate:.4f} per JPY.
+    - **Unhedged amount:** JPY {unhedged_jpy:,.0f} ({(1-hedge_ratio):.0%}), paid at the future market rate in each simulated path.
+    - **Estimated extra execution cost:** ₹{forward_execution_cost_cr:,.2f} crore using the input of {forward_cost_bps} basis points.
+    """)
+    st.caption(
+        "The execution cost is illustrative because no bank quote was provided. The forward rate already includes the "
+        "modeled interest-rate difference; do not add the forward premium again as a separate fee."
+    )
+
+    # Main hedge KPIs
+    k1, k2, k3, k4, k5 = st.columns(5)
     with k1:
-        st.metric(
-            "Expected Outflow (Mean)",
+        k1.metric(
+            "Average Payment",
             f"₹{mean_hed:,.2f} Cr",
-            f"Difference vs unhedged: ₹{mean_hed - mean_unh:+,.2f} Cr",
+            f"vs no hedge: ₹{mean_hed - mean_unh:+,.2f} Cr",
             delta_color="inverse"
         )
     with k2:
-        st.metric(
-            "Cash Flow Std. Deviation",
-            f"₹{std_hed:,.2f} Cr",
-            f"{std_reduction_pct:.1f}% lower than unhedged",
-            delta_color="inverse"
+        k2.metric(
+            "Extra Hedge Cost",
+            f"₹{forward_execution_cost_cr:,.2f} Cr",
+            f"{forward_cost_bps} bps assumed",
+            help="Illustrative execution cost; replace with a bank/dealer quote."
         )
     with k3:
-        st.metric(
-            "95th-Pct Outflow",
-            f"₹{var95_hed:,.2f} Cr",
-            f"Reduction: ₹{var95_savings_cr:,.2f} Cr",
+        k3.metric(
+            "Cash-Flow Variability",
+            f"₹{std_hed:,.2f} Cr",
+            f"{std_reduction_pct:.1f}% lower than no hedge",
             delta_color="inverse"
         )
     with k4:
-        st.metric(
-            "Maximum Simulated Outflow",
+        k4.metric(
+            "95th-Pct Payment",
+            f"₹{var95_hed:,.2f} Cr",
+            f"Change: ₹{var95_hed - var95_unh:+,.2f} Cr",
+            delta_color="inverse"
+        )
+    with k5:
+        k5.metric(
+            "Largest Simulated Payment",
             f"₹{max_hed:,.2f} Cr",
-            f"Difference: ₹{max_outflow_difference_cr:,.2f} Cr",
+            f"vs no hedge: ₹{max_hed - max_unh:+,.2f} Cr",
             delta_color="inverse"
         )
 
@@ -667,6 +686,92 @@ with tab3:
         }
     ])
     st.table(comp_table)
+
+    st.markdown("---")
+    st.subheader("Compare five hedge choices")
+    st.markdown(
+        "This table reuses the same simulated exchange rates for every option. That makes the comparison fair: "
+        "only the hedge percentage and its assumed execution cost change."
+    )
+    scenario_display = pd.DataFrame([
+        {
+            "Hedge %": f"{row['ratio']:.0%}",
+            "Extra execution cost (₹ Cr)": round(row["cost_cr"], 2),
+            "Average payment (₹ Cr)": round(row["mean_cr"], 2),
+            "95th-percentile payment (₹ Cr)": round(row["p95_cr"], 2),
+            "Worst-5%-average payment (₹ Cr)": round(row["es95_cr"], 2),
+            "Cash-flow standard deviation (₹ Cr)": round(row["std_cr"], 2),
+            "Largest simulated payment (₹ Cr)": round(row["max_cr"], 2),
+        }
+        for row in hedge_scenarios
+    ])
+    st.dataframe(scenario_display, use_container_width=True, hide_index=True)
+
+    fig_tradeoff = make_subplots(specs=[[{"secondary_y": True}]])
+    candidate_percentages = [row["ratio"] * 100 for row in hedge_scenarios]
+    fig_tradeoff.add_trace(
+        go.Bar(
+            x=candidate_percentages,
+            y=[row["p95_cr"] for row in hedge_scenarios],
+            name="95th-percentile payment (₹ Cr)",
+        ),
+        secondary_y=False,
+    )
+    fig_tradeoff.add_trace(
+        go.Scatter(
+            x=candidate_percentages,
+            y=[row["cost_cr"] for row in hedge_scenarios],
+            mode="lines+markers",
+            name="Extra execution cost (₹ Cr)",
+        ),
+        secondary_y=True,
+    )
+    fig_tradeoff.update_layout(
+        title="Risk and cost: how the hedge percentage changes the result",
+        xaxis_title="Forward hedge ratio (%)",
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+        margin=dict(l=40, r=40, t=55, b=80),
+        height=400,
+    )
+    fig_tradeoff.update_yaxes(title_text="95th-percentile payment (₹ crore)", secondary_y=False)
+    fig_tradeoff.update_yaxes(title_text="Assumed execution cost (₹ crore)", secondary_y=True)
+    st.plotly_chart(fig_tradeoff, use_container_width=True)
+
+    st.subheader("Simple decision helper")
+    p95_values = [row["p95_cr"] for row in hedge_scenarios]
+    lower_limit = float(np.floor(min(p95_values) * 2.0) / 2.0)
+    upper_limit = float(np.ceil(max(p95_values) * 2.0) / 2.0)
+    if upper_limit <= lower_limit:
+        upper_limit = lower_limit + 0.5
+    matching_current = min(hedge_scenarios, key=lambda row: abs(row["ratio"] - hedge_ratio))
+    default_limit = float(np.clip(round(matching_current["p95_cr"] * 2.0) / 2.0, lower_limit, upper_limit))
+    max_95_payment = st.slider(
+        "What is the highest 95th-percentile payment you are willing to plan for? (₹ crore)",
+        min_value=lower_limit,
+        max_value=upper_limit,
+        value=default_limit,
+        step=0.5,
+        help="This is a budget/risk limit you choose. It is not supplied by Maruti Suzuki."
+    )
+    qualifying = [row for row in hedge_scenarios if row["p95_cr"] <= max_95_payment]
+    if qualifying:
+        preferred = min(qualifying, key=lambda row: row["cost_cr"])
+        st.success(
+            f"Among the five tested choices, **{preferred['ratio']:.0%} hedge** has the lowest estimated "
+            f"execution cost (₹{preferred['cost_cr']:.2f} crore) while keeping the 95th-percentile payment at "
+            f"₹{preferred['p95_cr']:.2f} crore, within your selected limit."
+        )
+    else:
+        most_protective = min(hedge_scenarios, key=lambda row: row["p95_cr"])
+        st.warning(
+            f"None of the five tested choices meets that limit. The lowest 95th-percentile payment in this grid "
+            f"is ₹{most_protective['p95_cr']:.2f} crore at a {most_protective['ratio']:.0%} hedge. "
+            "Consider revising the limit or assumptions and reviewing the required hedge with treasury."
+        )
+    st.caption(
+        "This helper compares only 0%, 25%, 50%, 75% and 100% hedges. It is a learning aid, not an automatic "
+        "treasury recommendation. A real decision needs verified payment timing, actual currency exposure and a dealer quote."
+    )
 
 # ======================================================================================
 # TAB 4: INTEREST RATE SENSITIVITY & CAPITAL STRUCTURE
