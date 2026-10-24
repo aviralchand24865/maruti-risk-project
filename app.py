@@ -774,102 +774,109 @@ with tab3:
     )
 
 # ======================================================================================
-# TAB 4: INTEREST RATE SENSITIVITY & CAPITAL STRUCTURE
+# TAB 4: CAPITAL STRUCTURE & INTEREST-RATE SENSITIVITY
 # ======================================================================================
 with tab4:
-    st.subheader("1. Maruti Suzuki Capital Structure & Debt Assessment (Note 33.1 & 33.3)")
+    st.subheader("1. What does Maruti's latest report tell us?")
     st.markdown("""
-    A core requirement of financial risk analysis is evaluating whether interest rate hedging is necessary. 
-    Maruti Suzuki's audited financial disclosures demonstrate an extraordinary capital structure:
+    Maruti Suzuki's FY2025–26 report says the company had no long-term borrowings at year-end, can use short-term rupee
+    borrowing for cash-flow mismatches, and holds a large portfolio of debt mutual funds. So we should not invent a
+    large loan just to demonstrate an interest-rate hedge. This section shows an illustrative sensitivity of the
+    investment portfolio to a change in market yields.
     """)
 
     ci1, ci2, ci3, ci4 = st.columns(4)
     with ci1:
-        st.metric("Total Debt Borrowings", "₹33.1 Cr", "₹331 Million (Note 33.1)")
+        st.metric("Net worth (FY26)", "₹1,05,109.8 Cr", "₹1,051,098 million")
     with ci2:
-        st.metric("Total Equity Base", "₹83,982 Cr", "₹839,820 Million")
+        st.metric("Debt mutual funds (FY26)", "₹71,723.8 Cr", "Current + non-current investments")
     with ci3:
-        net_debt_equity_pct = (-423.0 / 83982.0) * 100.0
-        st.metric("Net Debt / Equity", f"{net_debt_equity_pct:.2f}%", "Using stated net debt of -₹423 Cr")
+        st.metric("Long-term borrowings", "None reported", "At 31 March 2026")
     with ci4:
-        st.metric("Debt Mutual Fund Assets", "₹53,320 Cr", "₹533,203 Million (Treasury)")
+        st.metric("Reported NAV sensitivity", "₹717.2 Cr", "For a 1% NAV movement")
+
+    st.markdown(
+        "Source: [Maruti Suzuki official annual reports](https://www.marutisuzuki.com/corporate/investors/company-reports) "
+        "— Annual Integrated Report FY2025–26. The report states that a 1% change in NAV of mutual-fund investments "
+        "would change profit by ₹7,172 million (about ₹717.2 crore)."
+    )
 
     st.markdown("---")
-    st.subheader("2. Simplified One-Year Interest / Yield Sensitivity")
+    st.subheader("2. Try an interest-rate change")
     st.caption(
-        "This slider estimates principal × rate change for one year. It is not a duration-based market-value "
-        "calculation for the mutual-fund portfolio and does not model instrument-level repricing or cash-flow timing."
+        "A simple finance rule: when market yields rise, the prices of existing fixed-income investments usually fall. "
+        "The duration formula below estimates that effect. The report does not provide one single duration for this "
+        "whole portfolio, so duration is a user-set assumption—not a reported company figure."
     )
 
-    borrowings_m = 331.0
-    debt_mf_m = 533203.0
-    pat_m = 132094.0
-
-    bps_shift = st.slider("Select Interest Rate Shift (basis points)", min_value=25, max_value=250, value=100, step=25)
-    shift_dec = bps_shift / 10000.0
-
-    debt_impact_cr = (borrowings_m * shift_dec) / 10.0
-    treasury_impact_cr = (debt_mf_m * shift_dec) / 10.0
-    debt_pat_pct = (borrowings_m * shift_dec / pat_m) * 100.0
-    treasury_pat_pct = (debt_mf_m * shift_dec / pat_m) * 100.0
-
-    ir_comp = pd.DataFrame([
-        {
-            "Balance Sheet Item": "Borrowings (Liability Debt Service)",
-            "Disclosed Value (FY24)": f"₹{borrowings_m:,.1f} M (₹{borrowings_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Simple Annual Interest Impact": f"₹{debt_impact_cr:,.2f} Crore / year",
-            "% of Net Profit (PAT)": f"{debt_pat_pct:.4f}%",
-            "Hedging Conclusion": "Negligible liability risk. Interest Rate Swaps (IRS) are economically unjustified."
-        },
-        {
-            "Balance Sheet Item": "Debt Mutual Fund Investments (Treasury Assets)",
-            "Disclosed Value (FY24)": f"₹{debt_mf_m:,.1f} M (₹{debt_mf_m/10:,.2f} Cr)",
-            f"{bps_shift} bps Simple Annual Yield Sensitivity": f"₹{treasury_impact_cr:,.2f} Crore / year",
-            "% of Net Profit (PAT)": f"{treasury_pat_pct:.2f}%",
-            "Hedging Conclusion": "Significant treasury asset yield sensitivity (disclosed in Note 33.2)."
-        }
-    ])
-    st.table(ir_comp)
-
-    # Show how the simplified annual cash-flow sensitivity scales with the selected rate shift.
-    sensitivity_bps = np.arange(25, 251, 25)
-    sensitivity_shift = sensitivity_bps / 10000.0
-    debt_sensitivity = (borrowings_m * sensitivity_shift) / 10.0
-    treasury_sensitivity = (debt_mf_m * sensitivity_shift) / 10.0
-
-    fig_sensitivity = make_subplots(specs=[[{"secondary_y": True}]])
-    fig_sensitivity.add_trace(
-        go.Scatter(
-            x=sensitivity_bps,
-            y=debt_sensitivity,
-            mode="lines+markers",
-            name="Borrowings (₹ crore/year)",
-        ),
-        secondary_y=False,
+    portfolio_value_cr = 71723.8
+    bps_shift = st.slider(
+        "Change in market yield (basis points)",
+        min_value=-250,
+        max_value=250,
+        value=100,
+        step=25,
+        help="Positive means yields rise; negative means yields fall. 100 basis points = 1 percentage point."
     )
-    fig_sensitivity.add_trace(
-        go.Scatter(
-            x=sensitivity_bps,
-            y=treasury_sensitivity,
-            mode="lines+markers",
-            name="Treasury investments (₹ crore/year)",
-        ),
-        secondary_y=True,
+    assumed_duration = st.slider(
+        "Assumed modified duration of the portfolio (years)",
+        min_value=0.25,
+        max_value=5.0,
+        value=1.0,
+        step=0.25,
+        help="Use fund factsheets to estimate this more precisely. The default 1 year is illustrative, not a reported value."
     )
-    fig_sensitivity.update_layout(
-        title="Simple Annual Interest / Yield Sensitivity by Rate Shift",
-        xaxis_title="Rate shift (basis points)",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
-        margin=dict(l=40, r=40, t=55, b=80),
-        height=380,
-    )
-    fig_sensitivity.update_yaxes(title_text="Borrowings impact (₹ crore/year)", secondary_y=False)
-    fig_sensitivity.update_yaxes(title_text="Treasury yield sensitivity (₹ crore/year)", secondary_y=True)
-    st.plotly_chart(fig_sensitivity, use_container_width=True)
 
-    st.info("""
-    **Interpretation and limitation:**  
-    Maruti Suzuki is represented here as a net-cash company, so borrowing-rate sensitivity appears small compared with the simple annual yield sensitivity shown for treasury investments. This does not prove that the mutual-fund portfolio's market value moves by the same amount. A proper portfolio valuation sensitivity would require fund composition, duration, repricing and cash-flow data. An interest-rate swap should only be recommended if a material, identifiable exposure justifies it.
+    estimated_nav_change_cr = approximate_duration_price_change_cr(
+        portfolio_value_cr=portfolio_value_cr,
+        modified_duration_years=assumed_duration,
+        rate_shift_bps=bps_shift,
+    )
+    rate_move = "yields rise" if bps_shift > 0 else "yields fall" if bps_shift < 0 else "yields do not change"
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Rate scenario", f"{bps_shift:+,} bps", rate_move.capitalize())
+    with c2:
+        st.metric("Estimated portfolio value change", f"₹{estimated_nav_change_cr:+,.2f} Cr", "Duration approximation")
+    with c3:
+        st.metric("Starting portfolio value", f"₹{portfolio_value_cr:,.1f} Cr", "FY26 debt mutual funds")
+
+    st.markdown("""
+    **Formula in plain language**
+
+    Estimated change in value ≈ − portfolio duration × change in yield × portfolio value.
+
+    For example, with a duration assumption of 1 year, a 1 percentage-point rise in yields implies an approximate
+    1% fall in portfolio value. If duration were 3 years, the same yield move would imply an approximate 3% fall.
+    This is a small-change estimate; it is not a full revaluation of the mutual-fund holdings.
     """)
 
+    rate_moves = np.arange(-250, 251, 25)
+    rate_changes = [
+        approximate_duration_price_change_cr(portfolio_value_cr, assumed_duration, move)
+        for move in rate_moves
+    ]
+    fig_rate = go.Figure()
+    fig_rate.add_trace(go.Scatter(
+        x=rate_moves,
+        y=rate_changes,
+        mode="lines+markers",
+        name="Estimated value change",
+    ))
+    fig_rate.add_vline(x=0, line_dash="dash", line_color="#64748B")
+    fig_rate.add_hline(y=0, line_dash="dash", line_color="#64748B")
+    fig_rate.update_layout(
+        title="Estimated portfolio value change under different yield scenarios",
+        xaxis_title="Change in market yield (basis points)",
+        yaxis_title="Estimated change in value (₹ crore)",
+        margin=dict(l=40, r=40, t=55, b=40),
+        height=380,
+    )
+    st.plotly_chart(fig_rate, use_container_width=True)
 
+    st.warning(
+        "Limitations: the duration is an assumption, and the portfolio contains different funds and maturities. "
+        "A precise valuation requires fund-level holdings and duration data. This model does not automatically prove "
+        "that an interest-rate swap is worthwhile. Only hedge a measurable exposure, and compare the dealer quote and "
+        "remaining risk before recommending a transaction."
+    )
