@@ -290,90 +290,115 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # TAB 1: EXECUTIVE SUMMARY & DISCLOSURES
 # ======================================================================================
 with tab1:
-    st.subheader("1. Company Background & Foreign Exchange Risk Profile")
+    st.subheader("1. What is the risk, in simple language?")
     st.markdown("""
-    **Maruti Suzuki India Limited (MSIL)** is India’s largest passenger vehicle manufacturer. Suzuki Motor Corporation (SMC), Japan, 
-    serves as the holding company with a **58.19% equity stake**. This corporate relationship results in major, ongoing commercial transactions denominated in the **Japanese Yen (JPY)**.
+    Maruti Suzuki pays for some goods and services in foreign currencies. This dashboard focuses on a **JPY payable**:
+    Maruti needs yen in the future and will pay more rupees if the yen becomes more expensive.
+
+    **Important:** the ¥10 billion input in the simulation is an illustrative payment scenario. It is not the same as the
+    company's total currency position in its annual report. The annual report shows several currencies and both
+    assets (money to receive) and liabilities (money to pay).
     """)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("Parent Equity Holding", "58.19%", "Suzuki Motor Corp (Japan)")
+        st.metric("Suzuki Motor Corp. holding", "58.53%", "At 31 March 2026")
     with col2:
-        st.metric("Annual Direct CIF Imports", "₹5,260 Cr", "Raw Materials & Machinery (Note 44)")
+        st.metric("JPY financial assets", "₹2,210.3 Cr", "₹22,103 million")
     with col3:
-        st.metric("Annual Royalty to SMC", "₹4,908 Cr", "Technical Fees (Note 29/34)")
+        st.metric("Gross JPY liabilities", "₹1,117.6 Cr", "₹11,176 million")
     with col4:
-        st.metric("Net Debt Position", "-₹423 Cr", "Virtually Debt-Free (Net Cash)")
+        st.metric("JPY liabilities after forwards", "₹814.8 Cr", "₹8,148 million")
 
     st.markdown("---")
-    st.subheader("2. Historical Company Disclosures (Annual Integrated Report FY 2023–24)")
-    
-    disc_df = pd.DataFrame([
+    st.subheader("2. Actual JPY balance-sheet snapshot")
+    st.caption(
+        "Figures are from the FY2025–26 annual report's foreign-currency exposure table. "
+        "Amounts below are reported in ₹ million and then explained in ₹ crore."
+    )
+    actual_fx_df = pd.DataFrame([
         {
-            "Financial Statement Schedule": "Note 44: CIF Value of Imports",
-            "Item": "Raw Materials, Components & Capital Goods",
-            "Reported Value (FY 2023-24)": "₹52,595 Million (~₹5,260 Cr)",
-            "Currency / Exposure Details": "Aggregate import value across categories; not all imports are JPY-denominated. JPY is the currency modeled separately below."
+            "What the report shows": "JPY financial assets (money due to the company)",
+            "31 Mar 2026 (₹ million)": 22103,
+            "31 Mar 2025 (₹ million)": 20124,
+            "Simple meaning": "JPY-denominated balances the company expects to receive or holds."
         },
         {
-            "Financial Statement Schedule": "Note 29 & Note 34.2: Related Party Expenses",
-            "Item": "Technical Royalty to Suzuki Motor Corp (Japan)",
-            "Reported Value (FY 2023-24)": "₹49,080 Million (~₹4,908 Cr)",
-            "Currency / Exposure Details": "Related-party royalty expense. Verify contractual settlement currency before treating the full amount as a JPY payable."
+            "What the report shows": "Gross JPY liabilities (money the company must pay)",
+            "31 Mar 2026 (₹ million)": 11176,
+            "31 Mar 2025 (₹ million)": 8810,
+            "Simple meaning": "JPY-denominated payables before the listed forward contracts."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Foreign Currency Risk Exposure",
-            "Item": "Gross Foreign Currency Payables (Standalone)",
-            "Reported Value (FY 2023-24)": "₹5,668 Million (JPY Payables)",
-            "Currency / Exposure Details": "JPY 10.28 Billion gross payables at closing spot rate"
+            "What the report shows": "Less: forwards against JPY liabilities",
+            "31 Mar 2026 (₹ million)": -3028,
+            "31 Mar 2025 (₹ million)": -3491,
+            "Simple meaning": "Existing contracts that reduce the yen liability exposure."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Derivative Contracts Outstanding",
-            "Item": "Forward Exchange Contracts (Hedged Payables)",
-            "Reported Value (FY 2023-24)": "₹(2,181) Million (in JPY)",
-            "Currency / Exposure Details": "MSIL hedged ~38.5% of gross JPY liabilities as of March 31, 2024"
+            "What the report shows": "JPY liabilities after forwards",
+            "31 Mar 2026 (₹ million)": 8148,
+            "31 Mar 2025 (₹ million)": 5319,
+            "Simple meaning": "Liabilities left after subtracting the listed forward contracts."
         },
         {
-            "Financial Statement Schedule": "Note 33.2: Net Unhedged Payables",
-            "Item": "Net Open Liability Exposure (Standalone)",
-            "Reported Value (FY 2023-24)": "₹3,487 Million (JPY Net Open)",
-            "Currency / Exposure Details": "₹5,034 Million on consolidated group basis"
+            "What the report shows": "Net JPY asset position (assets minus liabilities after forwards)",
+            "31 Mar 2026 (₹ million)": 13955,
+            "31 Mar 2025 (₹ million)": 14805,
+            "Simple meaning": "On this balance-sheet snapshot, JPY assets exceed the remaining JPY liabilities."
         }
     ])
-    st.table(disc_df)
+    st.dataframe(actual_fx_df, use_container_width=True, hide_index=True)
 
+    st.info(
+        "Why this matters: at 31 March 2026, reported JPY assets exceeded reported JPY liabilities after forward "
+        "contracts by about ₹1,395.5 crore. That means the year-end balance-sheet snapshot is a net JPY asset position. "
+        "The separate payable simulation below studies a future JPY payment; it should not be described as the company's "
+        "total net currency position."
+    )
+
+    st.subheader("3. What did the annual report say about currency sensitivity?")
+    sens1, sens2 = st.columns(2)
+    with sens1:
+        st.metric("If the rupee strengthens by 10%", "-₹139.6 Cr", "Reported JPY impact on profit/loss")
+    with sens2:
+        st.metric("If the rupee weakens by 10%", "+₹139.6 Cr", "Reported JPY impact on profit/loss")
     st.caption(
-        "Historical company disclosures shown above are context, not live data. The ¥10 billion simulation "
-        "exposure, spot rate, volatility and rates are model inputs; the selected notional is not asserted to be "
-        "Maruti Suzuki's actual open treasury position. Imports and receipts can involve several currencies."
+        "This is the company's reported sensitivity for outstanding JPY monetary items at year-end, not a forecast. "
+        "The report gives the impact in ₹ million (−1,396 / +1,396), equal to approximately ₹139.6 crore."
     )
     st.markdown(
-        "Source: [Maruti Suzuki investor reports](https://www.marutisuzuki.com/corporate/investors/company-reports). "
-        "Confirm the specific note, reporting scope (standalone/consolidated), currency and period before presenting figures."
+        "Source: [Maruti Suzuki official annual reports](https://www.marutisuzuki.com/corporate/investors/company-reports) "
+        "— Annual Integrated Report FY2025–26, standalone financial statements, foreign currency risk exposure and sensitivity."
     )
+
     st.markdown("---")
-    st.subheader("3. Direction and Nature of Risk")
+    st.subheader("4. Three kinds of currency risk")
     c_a, c_b, c_c = st.columns(3)
     with c_a:
-        st.info("""
-        **Risk Direction: Short JPY / Long INR**  
-        MSIL has payment obligations in JPY.  
-        * **JPY Appreciation (Upward Spike):** MSIL requires more INR to settle imports, eroding gross margins and operating EBITDA.  
-        * **JPY Depreciation:** Procurement costs decrease, benefiting profitability.
-        """)
+        st.info(
+            "**Transaction risk**\n\nA bill must be paid or received later. If the exchange rate changes before settlement, "
+            "the amount in rupees changes. This is what the JPY payable simulation focuses on."
+        )
     with c_b:
-        st.warning("""
-        **Natural Hedge Limitations**  
-        Export receipts and foreign-currency payments may be denominated in different currencies. USD/EUR receipts do not automatically offset a JPY payable. A valid natural hedge must match currency, amount and settlement timing. Use actual invoice/treasury data to quantify the remaining net exposure.
-        """)
+        st.info(
+            "**Translation risk**\n\nForeign-currency balances are converted into rupees for financial reporting. "
+            "The reported rupee value can change even when the foreign-currency amount does not."
+        )
     with c_c:
-        st.success("""
-        **Exposure Classification**  
-        * **Transaction Exposure:** Contractual JPY import invoices & royalty payments due within 1 year (Subject of this simulation).  
-        * **Translation Exposure:** Balance sheet revaluation under Ind AS 21.  
-        * **Economic Exposure:** Long-term cost competitiveness vs domestic peers.
-        """)
+        st.info(
+            "**Economic risk**\n\nCurrency movements can change future component costs, prices and competitiveness. "
+            "A simple one-year cash-flow simulation cannot capture every long-term business effect."
+        )
+
+    st.subheader("5. How to use the dashboard")
+    st.markdown("""
+    1. Set the size of the illustrative yen payment and the market assumptions in the left-hand controls.
+    2. Open **Monte Carlo Simulation** to see many possible exchange-rate outcomes—not one guaranteed prediction.
+    3. Open **Hedging Analysis** to compare a payment with no hedge against different forward hedge percentages.
+    4. Use the cost and risk comparison to discuss which choice fits a budget limit.
+    5. Open **Capital Structure & Rate Sensitivity** to see the separate interest-rate scenario and its assumptions.
+    """)
 
 # ======================================================================================
 # TAB 2: MONTE CARLO SIMULATION
