@@ -15,7 +15,9 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from risk_math import (
+    approximate_duration_price_change_cr,
     calculate_cash_outflows,
+    calculate_forward_execution_cost_cr,
     calculate_forward_rate,
     estimate_annualized_volatility,
     simulate_gbm,
@@ -98,7 +100,7 @@ exposure_jpy_bn = st.sidebar.number_input(
     max_value=100.0,
     value=10.0,
     step=1.0,
-    help="Default 10.0 Billion JPY reflects ~₹550-600 Crore procurement tranche or balance sheet payables."
+    help="Illustrative scenario exposure for this simulation. It is not Maruti Suzuki's actual net open position in the latest annual report."
 )
 exposure_jpy = exposure_jpy_bn * 1_000_000_000
 
@@ -118,8 +120,21 @@ hedge_ratio = st.sidebar.slider(
     max_value=100,
     value=50,
     step=5,
-    help="Percentage of JPY exposure hedged via 1-Year Currency Forward Contract."
+    help="Percentage of the modeled JPY payable whose rupee rate is fixed using a one-year forward."
 ) / 100.0
+
+forward_cost_bps = st.sidebar.slider(
+    "Assumed Forward Execution Cost (basis points)",
+    min_value=0,
+    max_value=50,
+    value=5,
+    step=1,
+    help="Illustrative extra execution cost, measured in basis points of hedged rupee notional. This is not a live bank quote."
+)
+st.sidebar.caption(
+    "A basis point is 0.01%. The forward rate already includes the modeled interest-rate differential; "
+    "this input is an additional assumed execution cost. Replace it with a dealer quote when available."
+)
 
 manual_ann_volatility = st.sidebar.slider(
     "Manual Annualized Volatility (σ)",
@@ -207,6 +222,41 @@ unhedged_jpy = exposure_jpy * (1.0 - hedge_ratio)
     forward_rate=forward_rate,
     hedge_ratio=hedge_ratio,
 )
+forward_execution_cost_cr = calculate_forward_execution_cost_cr(
+    exposure_jpy=exposure_jpy,
+    hedge_ratio=hedge_ratio,
+    forward_rate=forward_rate,
+    cost_bps=forward_cost_bps,
+)
+hedged_outflow_cr = hedged_outflow_cr + forward_execution_cost_cr
+
+# Prepare five hedge choices using the same simulated exchange rates for a fair comparison.
+hedge_scenarios = []
+for candidate_ratio in [0.0, 0.25, 0.50, 0.75, 1.0]:
+    _, candidate_base_outflow, _, _ = calculate_cash_outflows(
+        exposure_jpy=exposure_jpy,
+        terminal_rates=terminal_rates,
+        forward_rate=forward_rate,
+        hedge_ratio=candidate_ratio,
+    )
+    candidate_cost_cr = calculate_forward_execution_cost_cr(
+        exposure_jpy=exposure_jpy,
+        hedge_ratio=candidate_ratio,
+        forward_rate=forward_rate,
+        cost_bps=forward_cost_bps,
+    )
+    candidate_outflow = candidate_base_outflow + candidate_cost_cr
+    candidate_stats = summarize_outflows(candidate_outflow)
+    hedge_scenarios.append({
+        "ratio": candidate_ratio,
+        "cost_cr": candidate_cost_cr,
+        "mean_cr": candidate_stats["mean"],
+        "std_cr": candidate_stats["std"],
+        "p95_cr": candidate_stats["p95"],
+        "es95_cr": candidate_stats["es95"],
+        "p99_cr": candidate_stats["p99"],
+        "max_cr": candidate_stats["max"],
+    })
 
 # Statistical Metrics
 # Outflow percentiles are high-cost thresholds. Expected shortfall is the
