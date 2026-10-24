@@ -283,7 +283,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
     "📊 Executive Summary & Disclosures",
     "🎲 Monte Carlo Exchange Rate Simulation",
     "🛡️ Hedging Analysis & Payoff Comparison",
-    "🏦 Interest Rate Sensitivity & Capital Structure"
+    "🏦 Capital Structure & Rate Sensitivity"
 ])
 
 # ======================================================================================
